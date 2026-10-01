@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+TEMPLATES_DIR="$REPO_ROOT/templates"
+PROJECTS_DIR="${PROJECTS_DIR:-$HOME/projects}"
+
+TEMPLATE="${1:-}"
+PROJECT_NAME="${2:-}"
+
+usage() {
+    echo "Usage: new-project <template> <project-name>"
+    echo
+    echo "Available templates:"
+    for dir in "$TEMPLATES_DIR"/*/; do
+        [[ -f "$dir/template.env" ]] && echo "  $(basename "$dir")"
+    done
+    echo
+    echo "Project names allow letters, numbers, dots, underscores and hyphens."
+    exit 1
+}
+
+if [[ ! "$TEMPLATE" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+    usage
+fi
+
+TEMPLATE_DIR="$TEMPLATES_DIR/$TEMPLATE"
+
+if [[ ! -f "$TEMPLATE_DIR/template.env" || ! -d "$TEMPLATE_DIR/project" ]]; then
+    echo "Error: unknown template: $TEMPLATE"
+    echo
+    usage
+fi
+
+if [[ ! "$PROJECT_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]]; then
+    usage
+fi
+
+# Provides IMAGE and SERVICE.
+IMAGE=""
+SERVICE=""
+source "$TEMPLATE_DIR/template.env"
+
+if [[ -z "$IMAGE" || -z "$SERVICE" ]]; then
+    echo "Error: $TEMPLATE_DIR/template.env must define IMAGE and SERVICE."
+    exit 1
+fi
+
+PROJECT_ROOT="$PROJECTS_DIR/$PROJECT_NAME"
+
+if [[ -e "$PROJECT_ROOT" ]]; then
+    echo "Error: project already exists: $PROJECT_ROOT"
+    exit 1
+fi
+
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    echo "Error: $IMAGE is not available locally."
+    echo "Build it by running scripts/install from the dev-environment repository."
+    exit 1
+fi
+
+mkdir -p "$PROJECT_ROOT"
+cp -R "$TEMPLATE_DIR/project/." "$PROJECT_ROOT/"
+
+find "$PROJECT_ROOT" -type f -exec sed -i \
+    -e "s|{{PROJECT_NAME}}|$PROJECT_NAME|g" \
+    -e "s|{{IMAGE}}|$IMAGE|g" \
+    -e "s|{{SERVICE}}|$SERVICE|g" \
+    {} +
+
+echo "Created $TEMPLATE project: $PROJECT_ROOT"
+
+cd "$PROJECT_ROOT"
+docker compose up -d
+
+echo
+echo "Development container started."
+echo "Next:"
+echo "  cd \"$PROJECT_ROOT\""
+echo "  docker compose exec $SERVICE bash"

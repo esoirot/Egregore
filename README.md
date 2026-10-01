@@ -41,11 +41,17 @@ The Ubuntu host is intended to provide the infrastructure, not project-specific 
 dev-environment/
 ├── templates/
 │   └── node/
-│       └── Dockerfile
+│       ├── Dockerfile
+│       ├── template.env
+│       ├── validate
+│       └── project/
+│           ├── compose.yaml
+│           ├── .gitignore
+│           └── README.md
 │
 ├── scripts/
 │   ├── install
-│   └── new-node-project
+│   └── new-project
 │
 ├── docs/
 │
@@ -55,7 +61,7 @@ dev-environment/
 
 ### `templates/`
 
-Container definitions for the supported development environments.
+One directory per supported development environment. Each template contains the container image definition and the files copied into new projects. See [Adding a New Template](#adding-a-new-template).
 
 ### `scripts/`
 
@@ -112,12 +118,10 @@ The installer:
 
 * verifies the required host dependencies
 * configures the development scripts in `PATH`
-* builds the standard Node development image
-* validates Node
-* validates pnpm
-* validates nvm
-* validates the development user
 * validates the project generator
+* builds the development image of every template in `templates/`
+* validates that each image runs as the non-root `dev` user
+* runs each template's own checks (for Node: Node, pnpm and nvm)
 
 The installer is designed to be safe to run more than once.
 
@@ -125,10 +129,24 @@ The installer is designed to be safe to run more than once.
 
 # Creating a Project
 
-Once the environment is installed, create a new Node project with:
+Once the environment is installed, create a new project with:
 
 ```bash
-new-node-project my-project
+new-project <template> <project-name>
+```
+
+For example, a Node project:
+
+```bash
+new-project node my-project
+```
+
+Run `new-project` without arguments to list the available templates.
+
+Projects are created in `~/projects/` by default. Set `PROJECTS_DIR` to use another location:
+
+```bash
+PROJECTS_DIR=~/work new-project node my-project
 ```
 
 This creates:
@@ -499,21 +517,109 @@ This separation keeps the shared development infrastructure independent from ind
 
 ---
 
-# Future Environments
+# Adding a New Template
 
-The repository can support additional standardized environments over time.
+Every directory in `templates/` that contains a `template.env` file is a template. `scripts/install` builds all of them, and `new-project` can generate projects from any of them. No new script is needed.
 
-For example:
+The example below adds a `python` template.
+
+## 1. Create the template directory
 
 ```text
-templates/
-├── node/
-├── python/
-├── php/
-└── ...
+templates/python/
+├── Dockerfile        # development image
+├── template.env      # image tag and compose service name
+├── validate          # optional: template-specific checks
+└── project/          # files copied into every new project
+    ├── compose.yaml
+    ├── .gitignore
+    └── README.md
 ```
 
-Each environment should follow the same principles:
+## 2. Write the `Dockerfile`
+
+Follow the same rules as the Node image:
+
+* create a non-root user named `dev` and switch to it (`install` fails otherwise)
+* use `/workspace` as the working directory
+* pin versions explicitly
+
+## 3. Write `template.env`
+
+```bash
+# Image tag built by scripts/install and used by generated projects.
+IMAGE=python-env:3.14
+
+# Compose service name in generated projects (docker compose exec <SERVICE> bash).
+SERVICE=python
+```
+
+Both values are required. Always use a versioned tag, never `latest`.
+
+## 4. Add the project files
+
+Everything in `project/`, including dotfiles, is copied into the new project. The following placeholders are replaced in every file:
+
+| Placeholder        | Value                         |
+| ------------------ | ----------------------------- |
+| `{{PROJECT_NAME}}` | the project name              |
+| `{{IMAGE}}`        | `IMAGE` from `template.env`   |
+| `{{SERVICE}}`      | `SERVICE` from `template.env` |
+
+A minimal `project/compose.yaml`:
+
+```yaml
+services:
+  {{SERVICE}}:
+    image: {{IMAGE}}
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+    command: sleep infinity
+    init: true
+```
+
+`command: sleep infinity` keeps the container running so developers can enter it with `docker compose exec`.
+
+## 5. Add checks (optional)
+
+If `validate` exists and is executable, `install` runs it with the image tag as its first argument after the build. A non-zero exit fails the installation.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+IMAGE="$1"
+
+echo "✓ Python: $(docker run --rm "$IMAGE" python3 --version)"
+```
+
+```bash
+chmod +x templates/python/validate
+```
+
+## 6. Build and use the template
+
+Build and validate the image:
+
+```bash
+./scripts/install
+```
+
+Create a project from the new template:
+
+```bash
+new-project python my-api
+```
+
+Then work in it like any other project:
+
+```bash
+cd ~/projects/my-api
+docker compose exec python bash
+```
+
+Each template should follow the same principles:
 
 * reproducible
 * versioned

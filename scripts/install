@@ -4,7 +4,6 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPTS_DIR="$REPO_ROOT/scripts"
-NODE_IMAGE="node-env:26"
 
 echo
 echo "======================================"
@@ -65,53 +64,77 @@ fi
 export PATH="$SCRIPTS_DIR:$PATH"
 
 echo
-echo "Building Node development image..."
-echo
-
-docker build \
-    -t "$NODE_IMAGE" \
-    "$REPO_ROOT/templates/node"
-
-echo
-echo "Validating Node environment..."
-echo
-
-NODE_VERSION="$(docker run --rm "$NODE_IMAGE" node --version)"
-PNPM_VERSION="$(docker run --rm "$NODE_IMAGE" pnpm --version)"
-NVM_VERSION="$(docker run --rm "$NODE_IMAGE" bash -lc 'source "$NVM_DIR/nvm.sh" && nvm --version')"
-CONTAINER_USER="$(docker run --rm "$NODE_IMAGE" whoami)"
-
-echo "✓ Node: $NODE_VERSION"
-echo "✓ pnpm: $PNPM_VERSION"
-echo "✓ nvm: $NVM_VERSION"
-echo "✓ Container user: $CONTAINER_USER"
-
-if [[ "$CONTAINER_USER" != "dev" ]]; then
-    fail "The Node image is not running as the expected non-root user."
-fi
-
-echo
 echo "Validating project generator..."
 
-if [[ ! -x "$SCRIPTS_DIR/new-node-project" ]]; then
-    fail "scripts/new-node-project is missing or is not executable."
+if [[ ! -x "$SCRIPTS_DIR/new-project" ]]; then
+    fail "scripts/new-project is missing or is not executable."
 fi
 
-echo "✓ new-node-project"
+echo "✓ new-project"
+
+BUILT_TEMPLATES=()
+
+for TEMPLATE_DIR in "$REPO_ROOT"/templates/*/; do
+    TEMPLATE_DIR="${TEMPLATE_DIR%/}"
+    TEMPLATE="$(basename "$TEMPLATE_DIR")"
+
+    [[ -f "$TEMPLATE_DIR/template.env" ]] || continue
+
+    IMAGE=""
+    SERVICE=""
+    source "$TEMPLATE_DIR/template.env"
+
+    if [[ -z "$IMAGE" || -z "$SERVICE" ]]; then
+        fail "templates/$TEMPLATE/template.env must define IMAGE and SERVICE."
+    fi
+
+    if [[ ! -d "$TEMPLATE_DIR/project" ]]; then
+        fail "templates/$TEMPLATE/project/ is missing."
+    fi
+
+    echo
+    echo "Building $TEMPLATE development image ($IMAGE)..."
+    echo
+
+    docker build -t "$IMAGE" "$TEMPLATE_DIR"
+
+    echo
+    echo "Validating $TEMPLATE environment..."
+    echo
+
+    CONTAINER_USER="$(docker run --rm "$IMAGE" whoami)"
+    echo "✓ Container user: $CONTAINER_USER"
+
+    if [[ "$CONTAINER_USER" != "dev" ]]; then
+        fail "$IMAGE is not running as the expected non-root user."
+    fi
+
+    if [[ -x "$TEMPLATE_DIR/validate" ]]; then
+        "$TEMPLATE_DIR/validate" "$IMAGE" || fail "templates/$TEMPLATE/validate failed."
+    fi
+
+    BUILT_TEMPLATES+=("$TEMPLATE  ->  $IMAGE")
+done
+
+if [[ ${#BUILT_TEMPLATES[@]} -eq 0 ]]; then
+    fail "No templates found in templates/."
+fi
 
 echo
 echo "======================================"
 echo " Development environment is ready"
 echo "======================================"
 echo
-echo "Node image:"
-echo "  $NODE_IMAGE"
+echo "Templates:"
+for ENTRY in "${BUILT_TEMPLATES[@]}"; do
+    echo "  $ENTRY"
+done
 echo
 echo "CLI:"
-echo "  new-node-project <project-name>"
+echo "  new-project <template> <project-name>"
 echo
 echo "Example:"
-echo "  new-node-project my-project"
+echo "  new-project node my-project"
 echo
 echo "If this is your first installation, reload your shell with:"
 echo "  source ~/.bashrc"
