@@ -1,0 +1,13 @@
+# OS
+.DS_Store
+
+# Editor
+.vscode/
+
+# Local environment
+.env
+.env.*
+
+# Temporary files
+*.tmp
+*.log

@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPTS_DIR="$REPO_ROOT/scripts"
+NODE_IMAGE="node-env:26"
+
+echo
+echo "======================================"
+echo " Development Environment Setup"
+echo "======================================"
+echo
+echo "Repository: $REPO_ROOT"
+echo
+
+fail() {
+    echo
+    echo "ERROR: $1"
+    echo
+    exit 1
+}
+
+check_command() {
+    local command_name="$1"
+
+    if command -v "$command_name" >/dev/null 2>&1; then
+        echo "✓ $command_name"
+    else
+        fail "$command_name is not installed or is not available in PATH."
+    fi
+}
+
+echo "Checking prerequisites..."
+echo
+
+check_command git
+check_command docker
+
+echo "✓ Docker Compose"
+if ! docker compose version >/dev/null 2>&1; then
+    fail "Docker Compose is not available. Install the Docker Compose plugin first."
+fi
+
+echo "✓ Docker daemon"
+
+if ! docker info >/dev/null 2>&1; then
+    fail "Docker is installed, but the Docker daemon is not accessible.
+
+Make sure Docker is running and that your user can run Docker without sudo."
+fi
+
+echo
+echo "Configuring shell environment..."
+
+PATH_LINE='export PATH="$HOME/dev-environment/scripts:$PATH"'
+
+if ! grep -qxF "$PATH_LINE" "$HOME/.bashrc" 2>/dev/null; then
+    echo "$PATH_LINE" >> "$HOME/.bashrc"
+    echo "✓ Added dev-environment/scripts to ~/.bashrc"
+else
+    echo "✓ PATH already configured"
+fi
+
+export PATH="$SCRIPTS_DIR:$PATH"
+
+echo
+echo "Building Node development image..."
+echo
+
+docker build \
+    -t "$NODE_IMAGE" \
+    "$REPO_ROOT/templates/node"
+
+echo
+echo "Validating Node environment..."
+echo
+
+NODE_VERSION="$(docker run --rm "$NODE_IMAGE" node --version)"
+PNPM_VERSION="$(docker run --rm "$NODE_IMAGE" pnpm --version)"
+NVM_VERSION="$(docker run --rm "$NODE_IMAGE" bash -lc 'source "$NVM_DIR/nvm.sh" && nvm --version')"
+CONTAINER_USER="$(docker run --rm "$NODE_IMAGE" whoami)"
+
+echo "✓ Node: $NODE_VERSION"
+echo "✓ pnpm: $PNPM_VERSION"
+echo "✓ nvm: $NVM_VERSION"
+echo "✓ Container user: $CONTAINER_USER"
+
+if [[ "$CONTAINER_USER" != "dev" ]]; then
+    fail "The Node image is not running as the expected non-root user."
+fi
+
+echo
+echo "Validating project generator..."
+
+if [[ ! -x "$SCRIPTS_DIR/new-node-project" ]]; then
+    fail "scripts/new-node-project is missing or is not executable."
+fi
+
+echo "✓ new-node-project"
+
+echo
+echo "======================================"
+echo " Development environment is ready"
+echo "======================================"
+echo
+echo "Node image:"
+echo "  $NODE_IMAGE"
+echo
+echo "CLI:"
+echo "  new-node-project <project-name>"
+echo
+echo "Example:"
+echo "  new-node-project my-project"
+echo
+echo "If this is your first installation, reload your shell with:"
+echo "  source ~/.bashrc"
+echo

@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_NAME="${1:-}"
+PROJECTS_DIR="${PROJECTS_DIR:-$HOME/projects}"
+
+if [[ ! "$PROJECT_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]]; then
+    echo "Usage: new-node-project <project-name>"
+    echo "Allowed: letters, numbers, dots, underscores and hyphens."
+    exit 1
+fi
+
+PROJECT_ROOT="$PROJECTS_DIR/$PROJECT_NAME"
+
+if [[ -e "$PROJECT_ROOT" ]]; then
+    echo "Error: project already exists: $PROJECT_ROOT"
+    exit 1
+fi
+
+if ! docker image inspect node-env:26 >/dev/null 2>&1; then
+    echo "Error: node-env:26 is not available locally."
+    echo "Build it from the dev-environment repository first."
+    exit 1
+fi
+
+mkdir -p "$PROJECT_ROOT"
+
+cat > "$PROJECT_ROOT/compose.yaml" <<'YAML'
+services:
+  node:
+    image: node-env:26
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+    command: sleep infinity
+    init: true
+YAML
+
+cat > "$PROJECT_ROOT/.gitignore" <<'EOF2'
+node_modules/
+.pnpm-store/
+.env
+.env.*
+!.env.example
+EOF2
+
+cat > "$PROJECT_ROOT/README.md" <<EOF3
+# $PROJECT_NAME
+
+Node.js development environment managed with Docker.
+
+## Start
+
+\`\`\`bash
+docker compose up -d
+\`\`\`
+
+## Open a shell
+
+\`\`\`bash
+docker compose exec node bash
+\`\`\`
+
+## Stop
+
+\`\`\`bash
+docker compose down
+\`\`\`
+
+## IDE
+
+Use your preferred IDE.
+
+The development environment is provided by Docker.
+EOF3
+
+echo "Created project: $PROJECT_ROOT"
+
+cd "$PROJECT_ROOT"
+docker compose up -d
+
+echo
+echo "Development container started."
+echo "Next:"
+echo "  cd \"$PROJECT_ROOT\""
+echo "  code ."
