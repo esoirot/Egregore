@@ -1,0 +1,12 @@
+name: {{PROJECT_NAME}}
+
+services:
+  dev:
+    image: {{IMAGE}}
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+    ports:
+      - "127.0.0.1:${APP_PORT:-3000}:3000"
+    command: sleep infinity
+    init: true

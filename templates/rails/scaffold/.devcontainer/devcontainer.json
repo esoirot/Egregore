@@ -1,0 +1,14 @@
+{
+  "name": "{{PROJECT_NAME}}",
+  "dockerComposeFile": "../compose.yaml",
+  "service": "dev",
+  "workspaceFolder": "/workspace",
+  "remoteUser": "dev",
+  "shutdownAction": "none",
+  "features": {
+    "./ruby": {
+      "version": "4.0.7"
+    }
+  },
+  "postCreateCommand": "just init"
+}

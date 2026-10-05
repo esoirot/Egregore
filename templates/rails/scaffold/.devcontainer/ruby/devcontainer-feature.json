@@ -1,0 +1,16 @@
+{
+  "id": "ruby",
+  "version": "1.0.0",
+  "name": "Ruby (ruby-build)",
+  "description": "Builds an exact Ruby version with ruby-build. The official ruby feature (rvm) does not support Ruby 4.",
+  "options": {
+    "version": {
+      "type": "string",
+      "default": "4.0.7",
+      "description": "Exact Ruby version"
+    }
+  },
+  "containerEnv": {
+    "PATH": "/opt/ruby/bin:${PATH}"
+  }
+}
