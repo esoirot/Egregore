@@ -1,0 +1,28 @@
+# Team command contract: every project exposes install, dev, test, lint, build.
+# Run inside the container (dev shell). Recipes delegate to package.json scripts.
+
+set dotenv-load
+
+# List recipes
+default:
+    @just --list
+
+# Install dependencies
+install:
+    pnpm install
+
+# Start the app on port 3000 (reachable on the host at APP_PORT)
+dev:
+    pnpm run dev
+
+# Run tests
+test *args:
+    pnpm test {{args}}
+
+# Lint the code
+lint:
+    pnpm run lint
+
+# Check syntax (plain Node, no bundler)
+build:
+    pnpm run build

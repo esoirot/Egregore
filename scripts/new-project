@@ -13,10 +13,10 @@ usage() {
     echo
     echo "Available templates:"
     for dir in "$TEMPLATES_DIR"/*/; do
-        [[ -f "$dir/template.env" ]] && echo "  $(basename "$dir")"
+        [[ -d "$dir/scaffold" ]] && echo "  $(basename "$dir")"
     done
     echo
-    echo "Project names allow letters, numbers, dots, underscores and hyphens."
+    echo "Project names allow lowercase letters, numbers, underscores and hyphens."
     exit 1
 }
 
@@ -26,25 +26,20 @@ fi
 
 TEMPLATE_DIR="$TEMPLATES_DIR/$TEMPLATE"
 
-if [[ ! -f "$TEMPLATE_DIR/template.env" || ! -d "$TEMPLATE_DIR/project" ]]; then
+if [[ ! -d "$TEMPLATE_DIR/scaffold" ]]; then
     echo "Error: unknown template: $TEMPLATE"
     echo
     usage
 fi
 
-if [[ ! "$PROJECT_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]]; then
+# Lowercase only: the name is also the compose project name.
+if [[ ! "$PROJECT_NAME" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
     usage
 fi
 
-# Provides IMAGE and SERVICE.
+# Provides IMAGE (the shared base image).
 IMAGE=""
-SERVICE=""
-source "$TEMPLATE_DIR/template.env"
-
-if [[ -z "$IMAGE" || -z "$SERVICE" ]]; then
-    echo "Error: $TEMPLATE_DIR/template.env must define IMAGE and SERVICE."
-    exit 1
-fi
+source "$REPO_ROOT/images/base/image.env"
 
 PROJECT_ROOT="$PROJECTS_DIR/$PROJECT_NAME"
 
@@ -55,26 +50,34 @@ fi
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     echo "Error: $IMAGE is not available locally."
-    echo "Build it by running scripts/install from the dev-environment repository."
+    echo "Build it by running scripts/install from this repository."
     exit 1
 fi
 
 mkdir -p "$PROJECT_ROOT"
-cp -R "$TEMPLATE_DIR/project/." "$PROJECT_ROOT/"
+cp -R "$TEMPLATE_DIR/scaffold/." "$PROJECT_ROOT/"
 
 find "$PROJECT_ROOT" -type f -exec sed -i \
     -e "s|{{PROJECT_NAME}}|$PROJECT_NAME|g" \
     -e "s|{{IMAGE}}|$IMAGE|g" \
-    -e "s|{{SERVICE}}|$SERVICE|g" \
     {} +
 
 echo "Created $TEMPLATE project: $PROJECT_ROOT"
 
 cd "$PROJECT_ROOT"
-docker compose up -d
+
+# Seed .env so the host port is set before the first dev up (APP_PORT=<port> new-project ...).
+if [[ -f .env.example ]]; then
+    cp .env.example .env
+    if [[ -n "${APP_PORT:-}" ]]; then
+        sed -i "s|^APP_PORT=.*|APP_PORT=$APP_PORT|" .env
+    fi
+fi
+
+"$REPO_ROOT/scripts/dev" up
 
 echo
 echo "Development container started."
 echo "Next:"
 echo "  cd \"$PROJECT_ROOT\""
-echo "  docker compose exec $SERVICE bash"
+echo "  dev shell"

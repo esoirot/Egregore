@@ -1,0 +1,22 @@
+{
+  "id": "uv",
+  "version": "1.0.0",
+  "name": "uv + Python",
+  "description": "Installs an exact uv version and bakes an exact Python into the image.",
+  "options": {
+    "version": {
+      "type": "string",
+      "default": "0.12.23",
+      "description": "Exact uv version"
+    },
+    "python": {
+      "type": "string",
+      "default": "3.14.8",
+      "description": "Exact Python version installed by uv"
+    }
+  },
+  "containerEnv": {
+    "UV_PYTHON_INSTALL_DIR": "/opt/uv-python",
+    "UV_LINK_MODE": "copy"
+  }
+}

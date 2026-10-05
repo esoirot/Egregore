@@ -1,0 +1,43 @@
+# Team command contract: every project exposes install, dev, test, lint, build.
+# Run inside the container (dev shell).
+
+set dotenv-load
+
+rails_version := "8.1.4"
+
+# List recipes
+default:
+    @just --list
+
+# Create the Rails app if missing, then install gems (run by dev up)
+init:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ ! -f Gemfile ]]; then
+        gem install rails --version {{rails_version}} --no-document
+        rails _{{rails_version}}_ new . --name={{PROJECT_NAME}} --skip
+        # Rails ignores /.env*; keep the example committed.
+        echo '!/.env.example' >> .gitignore
+    fi
+    bundle install
+
+# Install dependencies
+install:
+    bundle install
+
+# Start the app on port 3000 (reachable on the host at APP_PORT)
+dev:
+    bin/rails server --binding 0.0.0.0 --port 3000
+
+# Run tests
+test *args:
+    bin/rails test {{args}}
+
+# Lint the code
+lint:
+    bin/rubocop
+
+# Verify the production asset build (same as the Dockerfile; output discarded)
+build:
+    RAILS_ENV=production SECRET_KEY_BASE_DUMMY=1 bin/rails assets:precompile
+    bin/rails assets:clobber

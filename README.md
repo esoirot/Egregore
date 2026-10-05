@@ -1,37 +1,32 @@
 # Development Environment
 
-Standardized, containerized development environments for the development team.
+Standardized, containerized development environments for POC projects.
 
-The goal of this repository is to provide a **consistent, reproducible, and disposable development environment** across developer machines, while keeping the host system clean.
+The team builds POCs on arbitrary stacks. This repository keeps them **consistent where it matters** — how a project is set up, entered and operated — while leaving each project free to pick its stack.
+
+* **One way in:** `dev up`, `dev shell`, `dev down` in every project.
+* **One command contract:** `just install | dev | test | lint | build` in every project.
+* **Stack as code:** each project declares its stack in `.devcontainer/devcontainer.json` (Dev Container Features), not in a hand-maintained image.
+* **Clean host:** the host only needs Git and Docker. Runtimes, package managers and even the Dev Containers CLI run in containers.
 
 ## Architecture
 
 ```text
 Windows 11
 └── WSL2
-    └── Ubuntu
+    └── Ubuntu (git + Docker Engine only)
         └── Docker Engine
+            ├── devcontainer-cli container   ← runs `dev` commands, then exits
             └── Project containers
-                ├── Runtime
-                ├── Dependencies
-                ├── CLI tools
-                └── Build tools
+                ├── base image (Ubuntu, dev user, git, just)
+                └── + project features (Node, Python, ...)
 ```
 
-Source code remains on the developer's Linux filesystem and is mounted into the project container.
+Source code stays on the WSL filesystem and is bind-mounted into the project container at `/workspace`.
 
 ```text
-~/projects/my-project/
-    ├── source code
-    ├── compose.yaml
-    └── ...
-
-        ↓ bind mount
-
-/container/workspace
+~/projects/my-project/   ── bind mount ──▶   /workspace
 ```
-
-The Ubuntu host is intended to provide the infrastructure, not project-specific runtimes.
 
 ---
 
@@ -39,608 +34,341 @@ The Ubuntu host is intended to provide the infrastructure, not project-specific 
 
 ```text
 dev-environment/
-├── templates/
-│   └── node/
+├── images/
+│   ├── base/                  # shared base image for every project
+│   │   ├── Dockerfile
+│   │   ├── image.env
+│   │   └── validate
+│   └── devcontainer-cli/      # Dev Containers CLI, used by scripts/dev
 │       ├── Dockerfile
-│       ├── template.env
-│       ├── validate
-│       └── project/
+│       ├── image.env
+│       └── validate
+│
+├── templates/
+│   ├── fastapi/
+│   │   └── scaffold/          # starter files copied once into a new project
+│   │       ├── .devcontainer/
+│   │       │   ├── devcontainer.json
+│   │       │   └── uv/            # local feature: uv + Python baked into the image
+│   │       ├── app/main.py
+│   │       ├── tests/test_main.py
+│   │       ├── pyproject.toml
+│   │       ├── .python-version
+│   │       ├── compose.yaml
+│   │       ├── justfile
+│   │       ├── Dockerfile
+│   │       ├── .dockerignore
+│   │       ├── .env.example
+│   │       ├── .gitignore
+│   │       └── README.md
+│   ├── java/
+│   │   └── scaffold/
+│   │       ├── .devcontainer/devcontainer.json
+│   │       ├── compose.yaml
+│   │       ├── justfile           # `init` runs `gradle init` on first dev up
+│   │       ├── Dockerfile
+│   │       ├── .dockerignore
+│   │       ├── .env.example
+│   │       └── README.md
+│   ├── node/
+│   │   └── scaffold/
+│   │       ├── .devcontainer/devcontainer.json
+│   │       ├── src/app.js, src/main.js
+│   │       ├── test/app.test.js
+│   │       ├── package.json
+│   │       ├── biome.json
+│   │       ├── compose.yaml
+│   │       ├── justfile
+│   │       ├── Dockerfile
+│   │       ├── .dockerignore
+│   │       ├── .env.example
+│   │       ├── .gitignore
+│   │       └── README.md
+│   └── rails/
+│       └── scaffold/
+│           ├── .devcontainer/
+│           │   ├── devcontainer.json
+│           │   └── ruby/          # local feature: builds Ruby with ruby-build
 │           ├── compose.yaml
-│           ├── .gitignore
+│           ├── justfile           # `init` runs `rails new` on first dev up
+│           ├── .env.example
 │           └── README.md
 │
 ├── scripts/
-│   ├── install
-│   └── new-project
+│   ├── bootstrap              # host setup (Docker Engine, systemd, docker group)
+│   ├── install                # PATH + build/validate images
+│   ├── new-project            # generate a project from a template
+│   └── dev                    # per-project entry point
 │
-├── docs/
+├── .github/workflows/
+│   └── images.yml             # CI: shellcheck, build + validate images, smoke-test templates
 │
-├── .gitignore
+├── .gitignore                 # keeps scaffold .env.example files tracked (!.env.example)
+├── CLAUDE.md
 └── README.md
 ```
 
+### `images/`
+
+Every directory with an `image.env` (defines `IMAGE`) and a `Dockerfile` is built by `install` and CI. An optional executable `validate <image>` checks the result.
+
+* `base`: Ubuntu 26.04, non-root `dev` user (uid 1000, passwordless sudo), git, build-essential, `just`. No language runtime.
+* `devcontainer-cli`: the [Dev Containers CLI](https://github.com/devcontainers/cli) plus the Docker CLI. `scripts/dev` runs it with the host Docker socket, so the host never needs Node.
+
 ### `templates/`
 
-One directory per supported development environment. Each template contains the container image definition and the files copied into new projects. See [Adding a New Template](#adding-a-new-template).
+One directory per stack preset. A template is only a `scaffold/`: no image, no script. The stack itself is a list of features in `scaffold/.devcontainer/devcontainer.json`.
 
-### `scripts/`
+| Template | Stack | Notes |
+| -------- | ----- | ----- |
+| `fastapi` | Python 3.14.8, FastAPI 0.142.2, uv 0.12.23, pytest, ruff | Local `uv` feature installs uv and bakes Python into the image (no compile, about 10 s). Ships a working app (`/`, `/health`) and tests; `postCreateCommand` runs `just install` (`uv sync`, creates `uv.lock`). Python 3.15 is not final yet (rc), so 3.14 is the latest stable. Ships a production `Dockerfile` stub. |
+| `java`   | JDK 27.0.0 (Amazon Corretto), Gradle 9.8.0, JUnit 6 (Jupiter) | Official `java` feature (SDKMAN). Plain Java, no framework. On first `dev up`, `just init` runs `gradle init` (Java application, Kotlin DSL, wrapper pinned to 9.8.0, toolchain 27). Corretto because SDKMAN has no Temurin build of 27. Ships a production `Dockerfile` stub. |
+| `node`   | Node 26.10.0, pnpm 12.9.1, Biome 2.5.15 | Official `node` feature. Ships a working app on Node built-ins (`node:http`, `/` and `/health`) and tests (`node:test`); Biome for lint and format. `postCreateCommand` runs `just install` (creates `pnpm-lock.yaml`). Ships a production `Dockerfile` stub. |
+| `rails`  | Ruby 4.0.7, Rails 8.1.4, SQLite | Local `ruby` feature (the official one does not support Ruby 4), so the first `dev up` compiles Ruby (a few minutes, then cached). On first `dev up`, `just init` runs `rails new` (app named after the project); Rails generates its own production `Dockerfile` and Kamal config. |
 
-Automation used to install the development environment and create new projects.
+### `.github/workflows/images.yml`
 
-### `docs/`
+On every pull request and push to `main`: `shellcheck` on the scripts and local feature installers, build and validate every image, then generate a project from every template and run `just --list` inside it.
 
-Additional development-environment documentation and conventions.
+Publishing to GitHub Container Registry (GHCR) is **disabled**. To enable it:
 
----
-
-# Requirements
-
-The standard environment currently assumes:
-
-* Windows 11 Pro
-* WSL2
-* Ubuntu
-* Docker Engine running inside Ubuntu
-* Docker Compose
-* Git
-
-Docker Desktop is **not required**.
-
-The intended architecture is:
-
-```text
-Windows → WSL2 → Ubuntu → Docker Engine
-```
+* CI: set the repository variable `PUBLISH_IMAGES` to `true` (Settings → Secrets and variables → Actions → Variables). Pushes to `main` then publish the images.
+* Developers: run `PULL_IMAGES=1 ./scripts/install` to pull the published images instead of building them.
 
 ---
 
-# Initial Setup
+# Setup
 
-Clone this repository into your WSL home directory:
+## Requirements
+
+* Windows 11, WSL2, Ubuntu
+* Docker Engine inside Ubuntu (Docker Desktop is **not** required)
+
+`scripts/bootstrap` installs what is missing.
+
+## 1. Clone
+
+Anywhere on the WSL filesystem, for example:
 
 ```bash
 git clone <company-repository-url> ~/dev-environment
-```
-
-Enter the repository:
-
-```bash
 cd ~/dev-environment
 ```
 
-Run the installer:
+## 2. Bootstrap the host
+
+```bash
+./scripts/bootstrap
+```
+
+Idempotent. It installs git and Docker Engine with the Compose plugin (official Docker apt repository), enables systemd in `/etc/wsl.conf` so Docker starts with WSL, and adds you to the `docker` group. Follow the "Next" line it prints (`wsl --shutdown` or a new terminal).
+
+## 3. Install
 
 ```bash
 ./scripts/install
 ```
 
-The installer:
+Idempotent. It:
 
-* verifies the required host dependencies
-* configures the development scripts in `PATH`
-* validates the project generator
-* builds the development image of every template in `templates/`
-* validates that each image runs as the non-root `dev` user
-* runs each template's own checks (for Node: Node, pnpm and nvm)
+* checks git, Docker, Compose and daemon access
+* adds `scripts/` to `PATH` in `~/.bashrc` (wherever the repository is cloned)
+* builds and validates every image in `images/` (with `PULL_IMAGES=1`: pulls from GHCR, building only if the pull fails)
 
-The installer is designed to be safe to run more than once.
+If you pull from GHCR and the package is private, log in once:
+
+```bash
+echo <github-token> | docker login ghcr.io -u <github-user> --password-stdin
+```
 
 ---
 
 # Creating a Project
 
-Once the environment is installed, create a new project with:
-
 ```bash
 new-project <template> <project-name>
+new-project node my-poc
 ```
 
-For example, a Node project:
+Run `new-project` without arguments to list templates. Project names are lowercase letters, numbers, `_` and `-` (the name is also the Compose project name).
+
+Projects go to `~/projects/` by default:
 
 ```bash
-new-project node my-project
+PROJECTS_DIR=~/work new-project node my-poc
 ```
 
-Run `new-project` without arguments to list the available templates.
-
-Projects are created in `~/projects/` by default. Set `PROJECTS_DIR` to use another location:
+`new-project` copies the template's scaffold, fills in the placeholders, creates `.env` from `.env.example`, and runs `dev up`. If port 3000 is already used on the host, pick another one up front:
 
 ```bash
-PROJECTS_DIR=~/work new-project node my-project
+APP_PORT=3100 new-project node my-poc
 ```
-
-This creates:
-
-```text
-~/projects/my-project/
-├── compose.yaml
-├── .gitignore
-└── README.md
-```
-
-Enter the project:
-
-```bash
-cd ~/projects/my-project
-```
-
-Start the development container:
-
-```bash
-docker compose up -d
-```
-
-Open a shell inside the container:
-
-```bash
-docker compose exec node bash
-```
-
-You are now working inside the standardized Node development environment.
 
 ---
 
-# Node Development Environment
+# Daily Workflow
 
-The current Node environment is based on:
-
-```text
-Ubuntu 26.04
-Node 26
-nvm
-pnpm
-Git
-build-essential
-```
-
-The container runs as the non-root user:
-
-```text
-dev
-```
-
-## Node Version Management
-
-`nvm` is the standard Node version manager inside the development container.
-
-Node installations should be managed through `nvm`.
-
-For example:
+From the project root, on the host:
 
 ```bash
-nvm --version
+dev up        # build the container (base image + features) and start it
+dev shell     # bash inside the container
+dev exec <cmd>
+dev down      # stop and remove the project's containers
 ```
+
+Inside the container, every project speaks the same commands:
 
 ```bash
-node --version
+just          # list commands
+just install
+just dev
+just test
+just lint
+just build
 ```
 
-```bash
-nvm ls
+## The `just` Command Contract
+
+Every scaffold ships a `justfile` with at least `install`, `dev`, `test`, `lint`, `build`. What a recipe runs depends on the stack (the Node scaffold delegates to `package.json` scripts); the names do not. Anyone can enter any POC and know how to run it. `just --list` shows each recipe with its description.
+
+Projects may add recipes. They should not rename or remove the five contract recipes.
+
+## Ports
+
+The scaffold's `compose.yaml` publishes the app's port 3000 on the host:
+
+```yaml
+ports:
+  - "127.0.0.1:${APP_PORT:-3000}:3000"
 ```
 
-The development image currently uses Node 26.
+Open `http://localhost:3000` from Windows. To run several POCs at once, set a different `APP_PORT` in each project's `.env` (created by `new-project` from `.env.example`).
 
-The development image is versioned as:
-
-```text
-node-env:26
-```
-
-Avoid using an unversioned `latest` tag for the team environment. Versioned tags make changes to the development environment explicit and reproducible.
+If `dev up` fails because the port is already in use ("port is already allocated" or "address already in use"), set another `APP_PORT` in `.env`, then run `dev down` before `dev up`. A plain `dev up` retry starts the half-created container without its port.
 
 ---
 
-# pnpm
+# Stacks and Versions
 
-The standard package manager for Node projects is:
+A project's stack is declared, not installed by hand:
 
-```text
-pnpm
+```json
+"features": {
+  "ghcr.io/devcontainers/features/node:1": { "version": "26.10.0", "pnpmVersion": "12.9.1" }
+}
 ```
 
-Check the installed version:
+Each project owns its versions. One POC can run Node 26 and another Node 24; a POC that needs Python too adds:
 
-```bash
-pnpm --version
+```json
+"ghcr.io/devcontainers/features/python:1": { "version": "3.14" }
 ```
 
-Project dependencies should be installed inside the development container.
+then reruns `dev up`. Available features: <https://containers.dev/features>.
 
-For example:
-
-```bash
-pnpm install
-```
+Never install runtimes manually inside a running container. Change `devcontainer.json` and rerun `dev up`, so the change is in the project's git history.
 
 ---
 
 # Project Isolation
 
-Each project gets its own container environment.
-
-For example:
+Each project has its own container, built from the shared base image plus its own features:
 
 ```text
-~/projects/project-a
-    └── container A
-
-~/projects/project-b
-    └── container B
+~/projects/poc-a   →  base + node 26
+~/projects/poc-b   →  base + node 24 + python 3.14
 ```
 
-This prevents dependencies and system tools from one project from interfering with another.
+Containers are disposable. Deleting and recreating one never touches source code, which lives on the host. If a container becomes inconsistent, `dev down && dev up` instead of repairing it.
 
-A project can therefore use its own:
-
-* Node version
-* npm/pnpm dependencies
-* system libraries
-* CLI tools
-* build tools
-* environment configuration
-
-without modifying the Ubuntu host.
-
----
-
-# Source Code and Containers
-
-The source code lives on the WSL Linux filesystem:
-
-```text
-~/projects/
-```
-
-It is mounted into the container at:
-
-```text
-/workspace
-```
-
-The container is therefore disposable.
-
-The important distinction is:
-
-```text
-Host
-└── Source code
-        ↓
-Container
-└── Runtime + dependencies + tools
-```
-
-Deleting and recreating a container should not delete the project source code.
-
----
-
-# Container Lifecycle
-
-Start a project:
-
-```bash
-docker compose up -d
-```
-
-Enter the container:
-
-```bash
-docker compose exec node bash
-```
-
-Stop the project:
-
-```bash
-docker compose down
-```
-
-Recreate the environment:
-
-```bash
-docker compose down
-docker compose up -d
-```
-
-The project environment should be considered disposable.
-
-If something becomes inconsistent inside the container, prefer rebuilding or recreating the environment rather than manually repairing it.
-
----
-
-# Development Workflow
-
-A typical workflow is:
-
-```bash
-cd ~/projects/my-project
-
-docker compose up -d
-
-docker compose exec node bash
-```
-
-Inside the container:
-
-```bash
-pnpm install
-pnpm run dev
-```
-
-When finished:
-
-```bash
-exit
-docker compose down
-```
-
-The exact project commands depend on the application.
+Keep source code on the WSL filesystem (`~/projects/...`), not under `/mnt/c/...`.
 
 ---
 
 # IDEs
 
-The development environment is **IDE-independent**.
+Any editor works on the files. Tools that support the open [Dev Containers spec](https://containers.dev) (VS Code, JetBrains IDEs, GitHub Codespaces) can attach using the same `.devcontainer/devcontainer.json`, which reuses the project's `compose.yaml`. Editors without support ignore it.
 
-The team standard is the container/runtime environment, not a specific editor.
+---
 
-Developers may use:
+# When a POC Graduates
 
-* VS Code
-* JetBrains IDEs
-* Neovim
-* Vim
-* Emacs
-* another editor or IDE
+Each project gets a production `Dockerfile` (plus `.dockerignore`), separate from the dev container: the `node`, `java` and `fastapi` scaffolds ship a stub, `rails new` generates one for `rails`. Adjust it to the app and build on the host:
 
-VS Code Dev Containers can be used as a personal workflow, but VS Code configuration is not required in application repositories.
-
-The project generator therefore does not create `.devcontainer` configuration by default.
+```bash
+docker build -t my-poc .
+```
 
 ---
 
 # Team Conventions
 
-The following principles should be followed.
-
-### 1. Keep the Ubuntu host clean
-
-Do not install project-specific Node, Python, databases, or other development dependencies directly into Ubuntu unless they are part of the infrastructure itself.
-
-### 2. Use containers for project environments
-
-Project runtimes and dependencies belong in the project's container environment.
-
-### 3. Keep source code on the WSL filesystem
-
-Prefer:
-
-```text
-~/projects/my-project
-```
-
-over:
-
-```text
-/mnt/c/...
-```
-
-for Linux-based development workflows.
-
-### 4. Use versioned development images
-
-Use:
-
-```text
-node-env:26
-```
-
-rather than:
-
-```text
-node-env:latest
-```
-
-This makes environment changes deliberate and easier to reproduce.
-
-### 5. Don't manually customize shared images
-
-Changes to the standard development environment should be made in this repository.
-
-For example:
-
-```text
-templates/node/Dockerfile
-```
-
-Then the image can be rebuilt and validated for the team.
-
-### 6. Keep project configuration in the project repository
-
-Application-specific dependencies and configuration belong in the application repository.
-
-The `dev-environment` repository contains the shared development infrastructure.
+1. **Keep the Ubuntu host clean.** Only git and Docker on the host. Everything else belongs in containers.
+2. **Declare the stack in `devcontainer.json`.** No manual installs in running containers.
+3. **Keep the `just` contract.** `install`, `dev`, `test`, `lint`, `build` in every project.
+4. **Use versioned, pinned images.** Tags are versioned (never `latest`); base images are pinned by digest in the Dockerfiles.
+5. **Change shared environments here.** Edit `images/` or `templates/` in this repository, not individual projects' copies.
+6. **Keep application config in the application repository.**
 
 ---
 
-# Updating the Development Environment
-
-When the shared environment changes:
+# Updating
 
 ```bash
 cd ~/dev-environment
 git pull
-```
-
-Then rebuild the image:
-
-```bash
 ./scripts/install
 ```
 
-The installer will rebuild and validate the standard development image.
-
-Existing project containers can then be recreated when appropriate:
+Then in a project:
 
 ```bash
-cd ~/projects/my-project
-
-docker compose down
-docker compose up -d
+dev down
+dev up
 ```
 
----
+Scaffolds are copied once: changes to a template only reach new projects. Port fixes from a template to existing projects by hand when needed.
 
-# Repository Responsibilities
-
-## `dev-environment`
-
-Contains:
-
-* development container definitions
-* development image configuration
-* project generators
-* installation scripts
-* team development conventions
-* shared development tooling
-
-## Application Repositories
-
-Contain:
-
-* application source code
-* application dependencies
-* application configuration
-* application tests
-* application-specific Docker/Compose configuration
-
-This separation keeps the shared development infrastructure independent from individual applications.
+To bump a pinned version (base image digest, Dev Containers CLI, or a template's runtime and tools), edit the `FROM` line or version in the relevant `Dockerfile`, `devcontainer.json` or `justfile`, and bump `IMAGE` in `image.env` when an image changes. Some templates pin the same version in several files (for example the dev feature and the production `Dockerfile`); `CLAUDE.md` lists where.
 
 ---
 
 # Adding a New Template
 
-Every directory in `templates/` that contains a `template.env` file is a template. `scripts/install` builds all of them, and `new-project` can generate projects from any of them. No new script is needed.
-
-The example below adds a `python` template.
-
-## 1. Create the template directory
+A template is a `templates/<name>/scaffold/` directory. No script changes and no image needed. Example: `go`.
 
 ```text
-templates/python/
-├── Dockerfile        # development image
-├── template.env      # image tag and compose service name
-├── validate          # optional: template-specific checks
-└── project/          # files copied into every new project
+templates/go/
+└── scaffold/
+    ├── .devcontainer/devcontainer.json
     ├── compose.yaml
+    ├── justfile
+    ├── Dockerfile
+    ├── .dockerignore
+    ├── .env.example
     ├── .gitignore
     └── README.md
 ```
 
-## 2. Write the `Dockerfile`
+Start from `templates/node/scaffold/` and change:
 
-Follow the same rules as the Node image:
+* `devcontainer.json`: the features (e.g. `ghcr.io/devcontainers/features/go:1`). If no published feature supports the version you need, write a local one in `.devcontainer/<name>/` (`devcontainer-feature.json` + `install.sh`; see `templates/rails` and `templates/fastapi`). For a stack whose app is generated by a tool (like `rails new` or `gradle init`), use `postCreateCommand` to run an idempotent `just init` recipe (see `templates/rails` and `templates/java`).
+* `justfile`: what the five contract recipes run
+* `Dockerfile`, `.gitignore`, `.dockerignore`, `README.md`: stack-specific content
+* `compose.yaml`: the app port, if not 3000
 
-* create a non-root user named `dev` and switch to it (`install` fails otherwise)
-* use `/workspace` as the working directory
-* pin versions explicitly
+Placeholders replaced in every file by `new-project`:
 
-## 3. Write `template.env`
+| Placeholder        | Value                                |
+| ------------------ | ------------------------------------ |
+| `{{PROJECT_NAME}}` | the project name                     |
+| `{{IMAGE}}`        | `IMAGE` from `images/base/image.env` |
 
-```bash
-# Image tag built by scripts/install and used by generated projects.
-IMAGE=python-env:3.14
-
-# Compose service name in generated projects (docker compose exec <SERVICE> bash).
-SERVICE=python
-```
-
-Both values are required. Always use a versioned tag, never `latest`.
-
-## 4. Add the project files
-
-Everything in `project/`, including dotfiles, is copied into the new project. The following placeholders are replaced in every file:
-
-| Placeholder        | Value                         |
-| ------------------ | ----------------------------- |
-| `{{PROJECT_NAME}}` | the project name              |
-| `{{IMAGE}}`        | `IMAGE` from `template.env`   |
-| `{{SERVICE}}`      | `SERVICE` from `template.env` |
-
-A minimal `project/compose.yaml`:
-
-```yaml
-services:
-  {{SERVICE}}:
-    image: {{IMAGE}}
-    working_dir: /workspace
-    volumes:
-      - .:/workspace
-    command: sleep infinity
-    init: true
-```
-
-`command: sleep infinity` keeps the container running so developers can enter it with `docker compose exec`.
-
-## 5. Add checks (optional)
-
-If `validate` exists and is executable, `install` runs it with the image tag as its first argument after the build. A non-zero exit fails the installation.
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-IMAGE="$1"
-
-echo "✓ Python: $(docker run --rm "$IMAGE" python3 --version)"
-```
-
-```bash
-chmod +x templates/python/validate
-```
-
-## 6. Build and use the template
-
-Build and validate the image:
-
-```bash
-./scripts/install
-```
-
-Create a project from the new template:
-
-```bash
-new-project python my-api
-```
-
-Then work in it like any other project:
-
-```bash
-cd ~/projects/my-api
-docker compose exec python bash
-```
-
-Each template should follow the same principles:
-
-* reproducible
-* versioned
-* containerized
-* non-root development user
-* disposable
-* documented
-* IDE-independent
+Keep the contract: service `dev`, `/workspace`, `remoteUser: dev`, the five `just` recipes, and placeholders instead of hardcoded image tags. Open a pull request: CI generates a project from the new template and runs `just --list` in it.
 
 ---
 
 # Design Principle
 
-The main principle behind this repository is:
-
-> **Keep the host stable. Make development environments disposable.**
-
-The developer's machine provides the infrastructure.
-
-The container provides the project environment.
-
-The source code remains persistent on the host.
-
-This gives developers a consistent environment without turning the Ubuntu installation into a collection of project-specific dependencies.
+> **Keep the host stable. Make development environments disposable. Standardize the interface, not the stack.**

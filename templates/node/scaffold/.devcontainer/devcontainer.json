@@ -1,0 +1,15 @@
+{
+  "name": "{{PROJECT_NAME}}",
+  "dockerComposeFile": "../compose.yaml",
+  "service": "dev",
+  "workspaceFolder": "/workspace",
+  "remoteUser": "dev",
+  "shutdownAction": "none",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "26.10.0",
+      "pnpmVersion": "12.9.1"
+    }
+  },
+  "postCreateCommand": "just install"
+}

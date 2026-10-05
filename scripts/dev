@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Project dev container entry point. Runs the Dev Containers CLI from a
+# container, so the host only needs Docker. Run from a project root.
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+
+usage() {
+    echo "Usage: dev <command>"
+    echo
+    echo "  up            build (with features) and start the dev container"
+    echo "  shell         open a bash shell in the dev container"
+    echo "  exec <cmd>    run a command in the dev container"
+    echo "  down          stop and remove the project's containers"
+    exit 1
+}
+
+[[ -f .devcontainer/devcontainer.json ]] || { echo "Error: no .devcontainer/devcontainer.json here. Run dev from a project root."; exit 1; }
+
+# Provides IMAGE (the CLI image).
+IMAGE=""
+source "$REPO_ROOT/images/devcontainer-cli/image.env"
+
+devcontainer() {
+    local tty=()
+    [[ -t 0 && -t 1 ]] && tty=(-t)
+
+    # Same path inside and outside: the CLI passes it to the host Docker daemon.
+    docker run --rm -i "${tty[@]}" \
+        -v /var/run/docker.sock:/var/run/docker.sock \
+        -v "$PWD:$PWD" -w "$PWD" \
+        "$IMAGE" "$1" --workspace-folder "$PWD" "${@:2}"
+}
+
+case "${1:-}" in
+    up)    devcontainer up ;;
+    shell) devcontainer exec bash ;;
+    exec)  shift; [[ $# -gt 0 ]] || usage; devcontainer exec "$@" ;;
+    down)  docker compose down ;;
+    *)     usage ;;
+esac

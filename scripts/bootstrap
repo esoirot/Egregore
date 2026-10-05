@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Host setup for WSL2 Ubuntu: git, Docker Engine + Compose plugin, systemd,
+# docker group. Idempotent: safe to rerun. Run before scripts/install.
+set -euo pipefail
+
+RESTART_WSL=0
+RELOGIN=0
+
+echo "Installing base packages..."
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl git
+
+# systemd starts the Docker daemon automatically under WSL.
+if ! grep -qs '^systemd=true' /etc/wsl.conf; then
+    printf '\n[boot]\nsystemd=true\n' | sudo tee -a /etc/wsl.conf >/dev/null
+    echo "✓ Enabled systemd in /etc/wsl.conf"
+    RESTART_WSL=1
+else
+    echo "✓ systemd already enabled"
+fi
+
+if ! command -v docker >/dev/null 2>&1; then
+    echo "Installing Docker Engine..."
+    sudo install -m 0755 -d /etc/apt/keyrings
+    sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+    sudo chmod a+r /etc/apt/keyrings/docker.asc
+    CODENAME="$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")"
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $CODENAME stable" \
+        | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
+    sudo apt-get update
+    sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    echo "✓ Docker Engine installed"
+else
+    echo "✓ Docker already installed"
+fi
+
+if ! id -nG "$USER" | grep -qw docker; then
+    sudo usermod -aG docker "$USER"
+    echo "✓ Added $USER to the docker group"
+    RELOGIN=1
+else
+    echo "✓ $USER already in the docker group"
+fi
+
+echo
+if [[ "$RESTART_WSL" == "1" ]]; then
+    echo "Next: run 'wsl --shutdown' in Windows, reopen Ubuntu, then run ./scripts/install"
+elif [[ "$RELOGIN" == "1" ]]; then
+    echo "Next: log out and back in (or open a new terminal), then run ./scripts/install"
+else
+    echo "Next: ./scripts/install"
+fi

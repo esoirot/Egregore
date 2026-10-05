@@ -1,0 +1,7 @@
+.git
+.devcontainer
+.gradle
+build
+app/build
+.env
+.env.*

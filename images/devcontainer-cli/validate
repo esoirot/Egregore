@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Image checks run by scripts/install and CI after the image is available.
+# Usage: validate <image>
+set -euo pipefail
+
+IMAGE="$1"
+
+echo "✓ devcontainer CLI: $(docker run --rm "$IMAGE" --version)"

@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Runs as root during the dev container build. VERSION comes from the feature option.
+set -euo pipefail
+
+RUBY_BUILD_VERSION=20260924
+
+# tzdata: Rails (tzinfo) needs zoneinfo to boot.
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    libssl-dev libyaml-dev zlib1g-dev libffi-dev libgmp-dev libreadline-dev tzdata
+
+curl -fsSL "https://github.com/rbenv/ruby-build/archive/refs/tags/v$RUBY_BUILD_VERSION.tar.gz" | tar -xz -C /tmp
+MAKE_OPTS="-j$(nproc)" "/tmp/ruby-build-$RUBY_BUILD_VERSION/bin/ruby-build" "$VERSION" /opt/ruby
+
+# Owned by the dev user so gem and bundle install work without sudo.
+chown -R "$_REMOTE_USER:$_REMOTE_USER" /opt/ruby
+
+rm -rf "/tmp/ruby-build-$RUBY_BUILD_VERSION" /var/lib/apt/lists/*
