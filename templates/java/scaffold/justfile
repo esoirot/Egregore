@@ -1,0 +1,39 @@
+# Team command contract: every project exposes install, dev, test, lint, build.
+# Run inside the container (dev shell).
+
+set dotenv-load
+
+# List recipes
+default:
+    @just --list
+
+# Create the Gradle project if missing (run by dev up)
+init:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ ! -f settings.gradle.kts ]]; then
+        gradle init --type java-application --dsl kotlin --test-framework junit-jupiter \
+            --project-name {{PROJECT_NAME}} --java-version 27 --no-split-project \
+            --no-incubating --overwrite
+        printf '\n.env\n' >> .gitignore
+    fi
+
+# Download dependencies
+install:
+    ./gradlew dependencies --quiet
+
+# Run the app
+dev:
+    ./gradlew run
+
+# Run tests
+test *args:
+    ./gradlew test {{args}}
+
+# Lint the code (compile with warnings + tests)
+lint:
+    ./gradlew check
+
+# Build the app
+build:
+    ./gradlew build
