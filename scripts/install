@@ -38,7 +38,7 @@ check_command docker
 
 echo "✓ Docker Compose"
 if ! docker compose version >/dev/null 2>&1; then
-    fail "Docker Compose is not available. Install the Docker Compose plugin first."
+    fail "Docker Compose is not available. Run scripts/bootstrap first."
 fi
 
 echo "✓ Docker daemon"
@@ -46,17 +46,17 @@ echo "✓ Docker daemon"
 if ! docker info >/dev/null 2>&1; then
     fail "Docker is installed, but the Docker daemon is not accessible.
 
-Make sure Docker is running and that your user can run Docker without sudo."
+Run scripts/bootstrap, or make sure Docker is running and your user can run Docker without sudo."
 fi
 
 echo
 echo "Configuring shell environment..."
 
-PATH_LINE='export PATH="$HOME/dev-environment/scripts:$PATH"'
+PATH_LINE="export PATH=\"$SCRIPTS_DIR:\$PATH\""
 
 if ! grep -qxF "$PATH_LINE" "$HOME/.bashrc" 2>/dev/null; then
     echo "$PATH_LINE" >> "$HOME/.bashrc"
-    echo "✓ Added dev-environment/scripts to ~/.bashrc"
+    echo "✓ Added $SCRIPTS_DIR to ~/.bashrc"
 else
     echo "✓ PATH already configured"
 fi
@@ -64,74 +64,61 @@ fi
 export PATH="$SCRIPTS_DIR:$PATH"
 
 echo
-echo "Validating project generator..."
+echo "Validating scripts..."
 
-if [[ ! -x "$SCRIPTS_DIR/new-project" ]]; then
-    fail "scripts/new-project is missing or is not executable."
-fi
-
-echo "✓ new-project"
-
-BUILT_TEMPLATES=()
-
-for TEMPLATE_DIR in "$REPO_ROOT"/templates/*/; do
-    TEMPLATE_DIR="${TEMPLATE_DIR%/}"
-    TEMPLATE="$(basename "$TEMPLATE_DIR")"
-
-    [[ -f "$TEMPLATE_DIR/template.env" ]] || continue
-
-    IMAGE=""
-    SERVICE=""
-    source "$TEMPLATE_DIR/template.env"
-
-    if [[ -z "$IMAGE" || -z "$SERVICE" ]]; then
-        fail "templates/$TEMPLATE/template.env must define IMAGE and SERVICE."
-    fi
-
-    if [[ ! -d "$TEMPLATE_DIR/project" ]]; then
-        fail "templates/$TEMPLATE/project/ is missing."
-    fi
-
-    echo
-    echo "Building $TEMPLATE development image ($IMAGE)..."
-    echo
-
-    docker build -t "$IMAGE" "$TEMPLATE_DIR"
-
-    echo
-    echo "Validating $TEMPLATE environment..."
-    echo
-
-    CONTAINER_USER="$(docker run --rm "$IMAGE" whoami)"
-    echo "✓ Container user: $CONTAINER_USER"
-
-    if [[ "$CONTAINER_USER" != "dev" ]]; then
-        fail "$IMAGE is not running as the expected non-root user."
-    fi
-
-    if [[ -x "$TEMPLATE_DIR/validate" ]]; then
-        "$TEMPLATE_DIR/validate" "$IMAGE" || fail "templates/$TEMPLATE/validate failed."
-    fi
-
-    BUILT_TEMPLATES+=("$TEMPLATE  ->  $IMAGE")
+for SCRIPT in new-project dev; do
+    [[ -x "$SCRIPTS_DIR/$SCRIPT" ]] || fail "scripts/$SCRIPT is missing or is not executable."
+    echo "✓ $SCRIPT"
 done
 
-if [[ ${#BUILT_TEMPLATES[@]} -eq 0 ]]; then
-    fail "No templates found in templates/."
-fi
+BUILT_IMAGES=()
+
+for IMAGE_DIR in "$REPO_ROOT"/images/*/; do
+    IMAGE_DIR="${IMAGE_DIR%/}"
+    NAME="$(basename "$IMAGE_DIR")"
+
+    IMAGE=""
+    source "$IMAGE_DIR/image.env"
+    [[ -n "$IMAGE" ]] || fail "images/$NAME/image.env must define IMAGE."
+
+    echo
+
+    # Registry pull is disabled unless PULL_IMAGES=1; the image is built locally.
+    if [[ "${PULL_IMAGES:-0}" == "1" ]] && docker pull "$IMAGE"; then
+        echo "✓ Pulled $IMAGE"
+    else
+        echo "Building $NAME image ($IMAGE)..."
+        echo
+        docker build -t "$IMAGE" "$IMAGE_DIR"
+    fi
+
+    if [[ -x "$IMAGE_DIR/validate" ]]; then
+        echo
+        echo "Validating $NAME..."
+        "$IMAGE_DIR/validate" "$IMAGE" || fail "images/$NAME/validate failed."
+    fi
+
+    BUILT_IMAGES+=("$NAME  ->  $IMAGE")
+done
 
 echo
 echo "======================================"
 echo " Development environment is ready"
 echo "======================================"
 echo
-echo "Templates:"
-for ENTRY in "${BUILT_TEMPLATES[@]}"; do
+echo "Images:"
+for ENTRY in "${BUILT_IMAGES[@]}"; do
     echo "  $ENTRY"
+done
+echo
+echo "Templates:"
+for DIR in "$REPO_ROOT"/templates/*/; do
+    [[ -d "$DIR/scaffold" ]] && echo "  $(basename "$DIR")"
 done
 echo
 echo "CLI:"
 echo "  new-project <template> <project-name>"
+echo "  dev up | shell | exec <cmd> | down"
 echo
 echo "Example:"
 echo "  new-project node my-project"

@@ -1,0 +1,57 @@
+name: Images
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck --severity=warning scripts/* images/*/validate templates/*/scaffold/.devcontainer/*/install.sh
+
+  images:
+    needs: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # GHCR publishing is disabled unless the repository variable PUBLISH_IMAGES is "true".
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request' && vars.PUBLISH_IMAGES == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build, validate and (if publishing is enabled) push every image
+        env:
+          PUSH: ${{ github.event_name != 'pull_request' && vars.PUBLISH_IMAGES == 'true' }}
+        run: |
+          set -euo pipefail
+          for dir in images/*/; do
+            dir="${dir%/}"
+            IMAGE=""
+            source "$dir/image.env"
+            docker build -t "$IMAGE" "$dir"
+            if [[ -x "$dir/validate" ]]; then "$dir/validate" "$IMAGE"; fi
+            if [[ "$PUSH" == "true" ]]; then docker push "$IMAGE"; fi
+          done
+
+      - name: Generate and start a project from every template
+        env:
+          PROJECTS_DIR: ${{ runner.temp }}/projects
+        run: |
+          set -euo pipefail
+          for dir in templates/*/; do
+            name="$(basename "$dir")"
+            scripts/new-project "$name" "ci-$name"
+            (cd "$PROJECTS_DIR/ci-$name" && "$GITHUB_WORKSPACE/scripts/dev" exec just --list)
+          done
