@@ -1,0 +1,30 @@
+# Team command contract: every project exposes install, dev, test, lint, build.
+# Run inside the container (dev shell).
+
+set dotenv-load
+
+# List recipes
+default:
+    @just --list
+
+# Install dependencies (run by dev up)
+install:
+    uv sync
+
+# Start the app on port 3000 with reload (reachable on the host at APP_PORT)
+dev:
+    uv run fastapi dev app/main.py --host 0.0.0.0 --port 3000
+
+# Run tests
+test *args:
+    uv run pytest {{args}}
+
+# Lint and check formatting
+lint:
+    uv run ruff check .
+    uv run ruff format --check .
+
+# Verify the lockfile and byte-compile the app
+build:
+    uv lock --check
+    uv run python -m compileall -q app
