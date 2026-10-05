@@ -1,24 +1,50 @@
 #!/usr/bin/env bash
 # Called by `new-project --from` as: adopt <project-dir>.
-# Matches the JDK and Gradle versions to the repository's .sdkmanrc (java=..., gradle=...).
+# Matches the JDK and Gradle versions to the repository's .sdkmanrc (java=..., gradle=...),
+# and switches the copied Gradle justfile to Maven recipes for a pom.xml build.
 set -euo pipefail
 
-cd "$1"
-[[ -f .sdkmanrc ]] || exit 0
-
+TEMPLATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 JSON=.devcontainer/devcontainer.json
-JAVA="$(sed -n 's/^java=\([^[:space:]]*\).*/\1/p' .sdkmanrc)"
-GRADLE="$(sed -n 's/^gradle=\([^[:space:]]*\).*/\1/p' .sdkmanrc)"
+cd "$1"
 
-if [[ -n "$JAVA" ]]; then
-    sed -i "s|\"version\": \"[^\"]*\"|\"version\": \"$JAVA\"|" "$JSON"
-    # SDKMAN identifiers end with the distribution, e.g. 21.0.5-tem.
-    if [[ "$JAVA" == *-* ]]; then
-        sed -i "s|\"jdkDistro\": \"[^\"]*\"|\"jdkDistro\": \"${JAVA##*-}\"|" "$JSON"
+if [[ -f .sdkmanrc ]]; then
+    JAVA="$(sed -n 's/^java=\([^[:space:]]*\).*/\1/p' .sdkmanrc)"
+    GRADLE="$(sed -n 's/^gradle=\([^[:space:]]*\).*/\1/p' .sdkmanrc)"
+
+    if [[ -n "$JAVA" ]]; then
+        sed -i "s|\"version\": \"[^\"]*\"|\"version\": \"$JAVA\"|" "$JSON"
+        # SDKMAN identifiers end with the distribution, e.g. 21.0.5-tem.
+        if [[ "$JAVA" == *-* ]]; then
+            sed -i "s|\"jdkDistro\": \"[^\"]*\"|\"jdkDistro\": \"${JAVA##*-}\"|" "$JSON"
+        fi
+        echo "JDK $JAVA (from .sdkmanrc)"
     fi
-    echo "JDK $JAVA (from .sdkmanrc)"
+    if [[ -n "$GRADLE" ]]; then
+        sed -i "s|\"gradleVersion\": \"[^\"]*\"|\"gradleVersion\": \"$GRADLE\"|" "$JSON"
+        echo "Gradle $GRADLE (from .sdkmanrc)"
+    fi
 fi
-if [[ -n "$GRADLE" ]]; then
-    sed -i "s|\"gradleVersion\": \"[^\"]*\"|\"gradleVersion\": \"$GRADLE\"|" "$JSON"
-    echo "Gradle $GRADLE (from .sdkmanrc)"
+
+# Only replace the justfile this template copied (a repository's own justfile wins).
+if [[ -f pom.xml ]] && grep -q '^# Team command contract' justfile && grep -q '\./gradlew' justfile; then
+    if [[ -f mvnw ]]; then
+        MVN=./mvnw
+    else
+        MVN=mvn
+        sed -i 's|"installGradle": true,|"installGradle": true,\n      "installMaven": true,|' "$JSON"
+    fi
+
+    if grep -q 'spring-boot-maven-plugin' pom.xml; then
+        DEV="$MVN spring-boot:run"
+    else
+        DEV="@echo 'No dev command yet: set the main class in the justfile dev recipe (e.g. $MVN compile exec:java -Dexec.mainClass=com.example.App).' >&2 && exit 1"
+    fi
+
+    # Not sed: DEV contains & and |. Quoted replacements, since bash 5.2 expands & in them.
+    RECIPES="$(cat "$TEMPLATE_DIR/maven.justfile")"
+    RECIPES="${RECIPES//@MVN@/"$MVN"}"
+    RECIPES="${RECIPES//@DEV@/"$DEV"}"
+    printf '%s\n' "$RECIPES" > justfile
+    echo "Maven build: justfile uses $MVN"
 fi

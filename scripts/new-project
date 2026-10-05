@@ -71,15 +71,24 @@ fi
 
 cd "$PROJECT_ROOT"
 
-# Copy scaffold files the project does not have yet; existing files always win.
+# scaffold/ is the dev environment; starter/ (sample app, production stub, README)
+# only goes into new projects, never into an adopted repository.
+SOURCES=("$TEMPLATE_DIR/scaffold")
+if [[ -z "$FROM_REPO" && -d "$TEMPLATE_DIR/starter" ]]; then
+    SOURCES+=("$TEMPLATE_DIR/starter")
+fi
+
+# Copy template files the project does not have yet; existing files always win.
 ADDED=()
-while IFS= read -r -d '' FILE; do
-    FILE="${FILE#./}"
-    [[ -e "$FILE" ]] && continue
-    mkdir -p "$(dirname "$FILE")"
-    cp -p "$TEMPLATE_DIR/scaffold/$FILE" "$FILE"
-    ADDED+=("$FILE")
-done < <(cd "$TEMPLATE_DIR/scaffold" && find . -type f -print0 | sort -z)
+for SOURCE in "${SOURCES[@]}"; do
+    while IFS= read -r -d '' FILE; do
+        FILE="${FILE#./}"
+        [[ -e "$FILE" ]] && continue
+        mkdir -p "$(dirname "$FILE")"
+        cp -p "$SOURCE/$FILE" "$FILE"
+        ADDED+=("$FILE")
+    done < <(cd "$SOURCE" && find . -type f -print0 | sort -z)
+done
 
 # Only in copied files: repository code may contain the same placeholders.
 for FILE in "${ADDED[@]}"; do

@@ -14,7 +14,10 @@ trap 'rm -rf "$WORK"' EXIT
 # Sandbox copy of this repo (git-visible files only) with a stub dev script.
 SANDBOX="$WORK/egregore"
 mkdir -p "$SANDBOX"
-git -C "$REPO_ROOT" ls-files -co --exclude-standard | tar -C "$REPO_ROOT" -cf - -T - | tar -C "$SANDBOX" -xf -
+# ls-files also lists tracked files deleted or moved in the working tree: keep existing ones.
+git -C "$REPO_ROOT" ls-files -co --exclude-standard \
+    | while IFS= read -r f; do [[ -e "$REPO_ROOT/$f" ]] && echo "$f"; done \
+    | tar -C "$REPO_ROOT" -cf - -T - | tar -C "$SANDBOX" -xf -
 cat > "$SANDBOX/scripts/dev" <<'EOF'
 #!/usr/bin/env bash
 echo "$PWD $*" >> "$DEV_LOG"
@@ -188,6 +191,76 @@ plain_new_project_unchanged() {
     grep -qx "$p up" "$DEV_LOG"
 }
 
+# just_dry_run <project> <recipe>: the command a recipe would run, resolved inside the base image.
+# just prints it on stderr; `*args` recipes render with a trailing space.
+just_dry_run() {
+    docker run --rm -v "$1:/workspace" "$BASE_IMAGE" just --dry-run "$2" 2>&1 | sed 's/[[:space:]]*$//'
+}
+
+maven_repo_with_wrapper_uses_mvnw() {
+    make_repo "$WORK/src/mvnw" "pom.xml=<project/>" "mvnw=#!/bin/sh"
+    "$NEW_PROJECT" java mvnw --from "$WORK/src/mvnw"
+    local p="$PROJECTS_DIR/mvnw"
+    [[ "$(just_dry_run "$p" test)" == "./mvnw test" ]]
+    [[ "$(just_dry_run "$p" build)" == "./mvnw package" ]]
+    fails grep -q '"installMaven"' "$p/.devcontainer/devcontainer.json"
+}
+
+maven_repo_without_wrapper_installs_maven() {
+    make_repo "$WORK/src/mvn2" "pom.xml=<project/>"
+    "$NEW_PROJECT" java mvn2 --from "$WORK/src/mvn2"
+    local p="$PROJECTS_DIR/mvn2"
+    [[ "$(just_dry_run "$p" test)" == "mvn test" ]]
+    grep -q '"installMaven": true' "$p/.devcontainer/devcontainer.json"
+}
+
+spring_boot_maven_repo_gets_dev_recipe() {
+    make_repo "$WORK/src/boot" "pom.xml=<plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin>" "mvnw=#!/bin/sh"
+    "$NEW_PROJECT" java boot --from "$WORK/src/boot"
+    [[ "$(just_dry_run "$PROJECTS_DIR/boot" dev)" == "./mvnw spring-boot:run" ]]
+}
+
+plain_maven_repo_dev_explains_main_class() {
+    make_repo "$WORK/src/plainmvn" "pom.xml=<project/>" "mvnw=#!/bin/sh"
+    "$NEW_PROJECT" java plainmvn --from "$WORK/src/plainmvn"
+    local out
+    out="$(docker run --rm -v "$PROJECTS_DIR/plainmvn:/workspace" "$BASE_IMAGE" just dev 2>&1)" && return 1
+    [[ "$out" == *"main class"* ]]
+}
+
+maven_repo_own_justfile_kept() {
+    make_repo "$WORK/src/mvnjf" "pom.xml=<project/>" "justfile=mine:"
+    "$NEW_PROJECT" java mvnjf --from "$WORK/src/mvnjf"
+    cmp "$WORK/src/mvnjf/justfile" "$PROJECTS_DIR/mvnjf/justfile"
+}
+
+gradle_repo_keeps_gradle_recipes() {
+    make_repo "$WORK/src/grd" "settings.gradle.kts=rootProject.name = \"grd\""
+    "$NEW_PROJECT" java grd --from "$WORK/src/grd"
+    [[ "$(just_dry_run "$PROJECTS_DIR/grd" test)" == "./gradlew test" ]]
+}
+
+adopted_repo_gets_no_sample_app() {
+    make_repo "$WORK/src/napp" "package.json={}" "index.js=//"
+    "$NEW_PROJECT" node napp --from "$WORK/src/napp"
+    make_repo "$WORK/src/papp" "pyproject.toml=[project]" "main.py=#"
+    "$NEW_PROJECT" fastapi papp --from "$WORK/src/papp"
+    local f
+    for f in napp/src napp/test napp/biome.json napp/Dockerfile napp/README.md \
+             papp/app papp/tests papp/.python-version papp/Dockerfile papp/README.md; do
+        [[ ! -e "$PROJECTS_DIR/$f" ]] || { echo "unexpected sample file: $f"; return 1; }
+    done
+    [[ -f "$PROJECTS_DIR/napp/compose.yaml" && -f "$PROJECTS_DIR/papp/justfile" ]]
+}
+
+new_fastapi_project_gets_starter() {
+    "$NEW_PROJECT" fastapi fresh
+    local p="$PROJECTS_DIR/fresh"
+    [[ -f "$p/app/main.py" && -f "$p/tests/test_main.py" && -f "$p/Dockerfile" && -f "$p/.python-version" ]]
+    grep -q 'name = "fresh"' "$p/pyproject.toml"
+    grep -q "^# fresh" "$p/README.md"
+}
+
 usage_rejects_incomplete_from() {
     fails "$NEW_PROJECT" rails x --from > /dev/null 2>&1
     fails "$NEW_PROJECT" rails x --bogus y > /dev/null 2>&1
@@ -210,6 +283,14 @@ scenario "Existing target folder fails without cloning" existing_target_fails_wi
 scenario "Clone failure leaves nothing behind" clone_failure_leaves_nothing
 scenario "Plain new-project unchanged" plain_new_project_unchanged
 scenario "Incomplete or unknown options are rejected" usage_rejects_incomplete_from
+scenario "Adopted repo gets no sample app or production stub" adopted_repo_gets_no_sample_app
+scenario "New project gets the starter app" new_fastapi_project_gets_starter
+scenario "Maven repo with wrapper uses ./mvnw" maven_repo_with_wrapper_uses_mvnw
+scenario "Maven repo without wrapper installs Maven" maven_repo_without_wrapper_installs_maven
+scenario "Spring Boot Maven repo gets a dev recipe" spring_boot_maven_repo_gets_dev_recipe
+scenario "Plain Maven repo: dev explains the main class" plain_maven_repo_dev_explains_main_class
+scenario "Maven repo with its own justfile keeps it" maven_repo_own_justfile_kept
+scenario "Gradle repo keeps the Gradle recipes" gradle_repo_keeps_gradle_recipes
 
 echo
 echo "$PASSED passed, $FAILED failed"

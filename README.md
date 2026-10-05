@@ -44,58 +44,57 @@ dev-environment/
 │       ├── image.env
 │       └── validate
 │
-├── templates/
+├── templates/                # per template: scaffold/ (dev environment) + starter/ (sample project)
 │   ├── fastapi/
-│   │   └── scaffold/          # starter files copied once into a new project
-│   │       ├── .devcontainer/
-│   │       │   ├── devcontainer.json
-│   │       │   └── uv/            # local feature: uv + Python baked into the image
-│   │       ├── app/main.py
-│   │       ├── tests/test_main.py
-│   │       ├── pyproject.toml
-│   │       ├── .python-version
-│   │       ├── compose.yaml
-│   │       ├── justfile
-│   │       ├── Dockerfile
-│   │       ├── .dockerignore
-│   │       ├── .env.example
-│   │       ├── .gitignore
+│   │   ├── scaffold/          # always copied
+│   │   │   ├── .devcontainer/
+│   │   │   │   ├── devcontainer.json
+│   │   │   │   └── uv/        # local feature: uv + Python baked into the image
+│   │   │   ├── compose.yaml
+│   │   │   ├── justfile
+│   │   │   ├── .env.example
+│   │   │   └── .gitignore
+│   │   └── starter/           # new projects only, never with --from
+│   │       ├── app/main.py, tests/test_main.py
+│   │       ├── pyproject.toml, .python-version
+│   │       ├── Dockerfile, .dockerignore
 │   │       └── README.md
 │   ├── java/
-│   │   └── scaffold/
-│   │       ├── .devcontainer/devcontainer.json
-│   │       ├── compose.yaml
-│   │       ├── justfile           # `init` runs `gradle init` on first dev up
-│   │       ├── Dockerfile
-│   │       ├── .dockerignore
-│   │       ├── .env.example
-│   │       └── README.md
+│   │   ├── adopt              # --from: .sdkmanrc versions, Maven recipes for pom.xml
+│   │   ├── maven.justfile     # recipes written by adopt for Maven builds
+│   │   ├── scaffold/
+│   │   │   ├── .devcontainer/devcontainer.json
+│   │   │   ├── compose.yaml
+│   │   │   ├── justfile       # `init` runs `gradle init` on first dev up
+│   │   │   └── .env.example
+│   │   └── starter/           # Dockerfile, .dockerignore, README.md
 │   ├── node/
-│   │   └── scaffold/
-│   │       ├── .devcontainer/devcontainer.json
-│   │       ├── src/app.js, src/main.js
-│   │       ├── test/app.test.js
-│   │       ├── package.json
-│   │       ├── biome.json
-│   │       ├── compose.yaml
-│   │       ├── justfile
-│   │       ├── Dockerfile
-│   │       ├── .dockerignore
-│   │       ├── .env.example
-│   │       ├── .gitignore
+│   │   ├── adopt              # --from: .nvmrc / .node-version
+│   │   ├── scaffold/
+│   │   │   ├── .devcontainer/devcontainer.json
+│   │   │   ├── compose.yaml
+│   │   │   ├── justfile
+│   │   │   ├── .env.example
+│   │   │   └── .gitignore
+│   │   └── starter/
+│   │       ├── src/app.js, src/main.js, test/app.test.js
+│   │       ├── package.json, biome.json
+│   │       ├── Dockerfile, .dockerignore
 │   │       └── README.md
 │   └── rails/
-│       └── scaffold/
-│           ├── .devcontainer/
-│           │   ├── devcontainer.json
-│           │   └── ruby/          # local feature: builds Ruby with ruby-build
-│           ├── compose.yaml
-│           ├── justfile           # `init` runs `rails new` on first dev up
-│           ├── .env.example
-│           └── README.md
+│       ├── adopt              # --from: .ruby-version
+│       ├── scaffold/
+│       │   ├── .devcontainer/
+│       │   │   ├── devcontainer.json
+│       │   │   └── ruby/      # local feature: builds Ruby with ruby-build
+│       │   ├── compose.yaml
+│       │   ├── justfile       # `init` runs `rails new` on first dev up
+│       │   └── .env.example
+│       └── starter/           # README.md (rails new generates the rest)
 │
 ├── tests/
-│   └── new-project-from       # behavior tests for new-project (stubbed dev, local fixture repos)
+│   ├── new-project-from       # behavior tests for new-project (stubbed dev, local fixture repos)
+│   └── dev                    # behavior test for dev up cleanup (real containers)
 │
 ├── scripts/
 │   ├── bootstrap              # host setup (Docker Engine, systemd, docker group)
@@ -120,7 +119,11 @@ Every directory with an `image.env` (defines `IMAGE`) and a `Dockerfile` is buil
 
 ### `templates/`
 
-One directory per stack preset. A template is only a `scaffold/`: no image, no script. The stack itself is a list of features in `scaffold/.devcontainer/devcontainer.json`.
+One directory per stack preset, with no image of its own:
+
+* `scaffold/`: the dev environment (`.devcontainer/`, `compose.yaml`, `justfile`, `.env.example`), copied into every project. The stack itself is a list of features in `scaffold/.devcontainer/devcontainer.json`.
+* `starter/`: a sample project (app, tests, production `Dockerfile` stub, README), copied only into **new** projects, never into a repository adopted with `--from`.
+* `adopt` (optional, executable): adapts the copied scaffold to an adopted repository (runtime version, build tool).
 
 | Template | Stack | Notes |
 | -------- | ----- | ----- |
@@ -131,7 +134,7 @@ One directory per stack preset. A template is only a `scaffold/`: no image, no s
 
 ### `.github/workflows/images.yml`
 
-On every pull request and push to `main`: `shellcheck` on the scripts, tests, adopt hooks and local feature installers; build and validate every image; run `tests/new-project-from`; then generate a project from every template and run `just --list` inside it.
+On every pull request and push to `main`: `shellcheck` on the scripts, tests, adopt hooks and local feature installers; build and validate every image; run `tests/new-project-from` and `tests/dev`; then generate a project from every template and run `just --list` inside it.
 
 Publishing to GitHub Container Registry (GHCR) is **disabled**. To enable it:
 
@@ -201,7 +204,7 @@ Projects go to `~/projects/` by default:
 PROJECTS_DIR=~/work new-project node my-poc
 ```
 
-`new-project` copies the template's scaffold, fills in the placeholders, creates `.env` from `.env.example`, and runs `dev up`. If port 3000 is already used on the host, pick another one up front:
+`new-project` copies the template's `scaffold/` and `starter/`, fills in the placeholders, creates `.env` from `.env.example`, and runs `dev up`. If port 3000 is already used on the host, pick another one up front:
 
 ```bash
 APP_PORT=3100 new-project node my-poc
@@ -218,14 +221,17 @@ APP_PORT=3100 new-project rails my-app --from ~/src/my-app    # a local path wor
 
 It clones the repository into `~/projects/my-app`, then adds the template's dev environment around the code:
 
-* **Repository files always win.** Scaffold files are copied only where the repository has none (its `README.md`, `.gitignore`, `justfile`, `.devcontainer/` are kept).
+* **Only the dev environment is added.** The template's `scaffold/` is copied; its `starter/` (sample app, tests, production `Dockerfile` stub, README) is not.
+* **Repository files always win.** Scaffold files are copied only where the repository has none (its `.gitignore`, `justfile`, `.devcontainer/` are kept).
 * **Placeholders are filled only in the copied files**, never in the repository's code.
 * **Runtime version follows the repository**: `.ruby-version` (rails), `.nvmrc` or `.node-version` (node), `.sdkmanrc` `java=` / `gradle=` (java). For fastapi, uv reads `.python-version` directly. Without a version file, the template's pin is kept.
 * **Generators never run over existing code**: `rails new` is skipped when a `Gemfile` exists, `gradle init` when any Gradle or Maven build exists.
+* **Build tool follows the repository**: for a `pom.xml` build, the `java` recipes switch to Maven (`./mvnw` if the repository has the wrapper, otherwise `mvn`, installed through the java feature). `just dev` runs `spring-boot:run` for Spring Boot; for other Maven apps it explains how to set the main class.
+* **FastAPI app location is discovered**: `just dev` finds the app in `main.py`, `app.py`, `api.py` or `app/{main,app,api}.py`, and `just build` byte-compiles the whole project.
 * **`.env`** is created from `.env.example` if missing, and `APP_PORT` is added if the repository's example lacks it.
 * The copied files are listed at the end. They stay **untracked**: commit them if the team adopts this setup, or list them in `.git/info/exclude` to keep them local.
 
-Still manual: database and other services (add them to `compose.yaml`), and `just` recipes that do not match the repository's tooling (for example a Maven project with the Gradle-based `java` recipes).
+Still manual: database and other services (add them to `compose.yaml`), other app layouts (for example a FastAPI app outside the discovered paths, or a non-Spring Maven app: edit the `dev` recipe), and Python repositories with only a `requirements.txt` (`uv sync` needs a `pyproject.toml`).
 
 If the repository has its own `.devcontainer/devcontainer.json`, it is kept and `new-project` prints a note: merge it with the template's by hand.
 
@@ -255,7 +261,7 @@ just build
 
 ## The `just` Command Contract
 
-Every scaffold ships a `justfile` with at least `install`, `dev`, `test`, `lint`, `build`. What a recipe runs depends on the stack (the Node scaffold delegates to `package.json` scripts); the names do not. Anyone can enter any POC and know how to run it. `just --list` shows each recipe with its description.
+Every template ships a `justfile` with at least `install`, `dev`, `test`, `lint`, `build`. What a recipe runs depends on the stack (the Node scaffold delegates to `package.json` scripts); the names do not. Anyone can enter any POC and know how to run it. `just --list` shows each recipe with its description.
 
 Projects may add recipes. They should not rename or remove the five contract recipes.
 
@@ -270,7 +276,7 @@ ports:
 
 Open `http://localhost:3000` from Windows. To run several POCs at once, set a different `APP_PORT` in each project's `.env` (created by `new-project` from `.env.example`).
 
-If `dev up` fails because the port is already in use ("port is already allocated" or "address already in use"), set another `APP_PORT` in `.env`, then run `dev down` before `dev up`. A plain `dev up` retry starts the half-created container without its port.
+If `dev up` fails (for example "port is already allocated"), it removes the half-created container and says so. Set another `APP_PORT` in `.env` and run `dev up` again.
 
 ---
 
@@ -315,11 +321,18 @@ Keep source code on the WSL filesystem (`~/projects/...`), not under `/mnt/c/...
 
 Any editor works on the files. Tools that support the open [Dev Containers spec](https://containers.dev) (VS Code, JetBrains IDEs, GitHub Codespaces) can attach using the same `.devcontainer/devcontainer.json`, which reuses the project's `compose.yaml`. Editors without support ignore it.
 
+Every template's configuration resolves with the official Dev Containers CLI (`devcontainer read-configuration`), the engine VS Code uses. Attaching from an IDE GUI has not been tested yet. To check it with VS Code on Windows:
+
+1. Install the **WSL** and **Dev Containers** extensions; in the Dev Containers settings, enable **Execute In WSL** (uses Docker Engine inside WSL, no Docker Desktop).
+2. In WSL: `new-project node ide-check`, then `cd ~/projects/ide-check && code .`.
+3. Run **Dev Containers: Reopen in Container**. Expect the window to reopen in `/workspace` as `dev`, with a terminal where `just --list` works.
+4. `dev down` and remove the project afterwards.
+
 ---
 
 # When a POC Graduates
 
-Each project gets a production `Dockerfile` (plus `.dockerignore`), separate from the dev container: the `node`, `java` and `fastapi` scaffolds ship a stub, `rails new` generates one for `rails`. Adjust it to the app and build on the host:
+Each new project gets a production `Dockerfile` (plus `.dockerignore`), separate from the dev container: the `node`, `java` and `fastapi` starters ship a stub, `rails new` generates one for `rails`. Adopted repositories keep their own. Adjust it to the app and build on the host:
 
 ```bash
 docker build -t my-poc .
@@ -361,28 +374,30 @@ To bump a pinned version (base image digest, Dev Containers CLI, or a template's
 
 # Adding a New Template
 
-A template is a `templates/<name>/scaffold/` directory. No script changes and no image needed. Example: `go`.
+A template is a `templates/<name>/` directory with a `scaffold/` and, usually, a `starter/`. No script changes and no image needed. Example: `go`.
 
 ```text
 templates/go/
-└── scaffold/
-    ├── .devcontainer/devcontainer.json
-    ├── compose.yaml
-    ├── justfile
-    ├── Dockerfile
-    ├── .dockerignore
-    ├── .env.example
-    ├── .gitignore
-    └── README.md
+├── scaffold/                 # dev environment, always copied
+│   ├── .devcontainer/devcontainer.json
+│   ├── compose.yaml
+│   ├── justfile
+│   ├── .env.example
+│   └── .gitignore
+├── starter/                  # sample project, new projects only
+│   ├── main.go, main_test.go, go.mod
+│   ├── Dockerfile, .dockerignore
+│   └── README.md
+└── adopt                     # optional, for new-project --from
 ```
 
-Start from `templates/node/scaffold/` and change:
+Start from `templates/node/` and change:
 
-* `devcontainer.json`: the features (e.g. `ghcr.io/devcontainers/features/go:1`). If no published feature supports the version you need, write a local one in `.devcontainer/<name>/` (`devcontainer-feature.json` + `install.sh`; see `templates/rails` and `templates/fastapi`). For a stack whose app is generated by a tool (like `rails new` or `gradle init`), use `postCreateCommand` to run an idempotent `just init` recipe (see `templates/rails` and `templates/java`).
-* `justfile`: what the five contract recipes run
-* `Dockerfile`, `.gitignore`, `.dockerignore`, `README.md`: stack-specific content
-* `compose.yaml`: the app port, if not 3000
-* optional `templates/go/adopt` (executable, next to `scaffold/`): called by `new-project --from` as `adopt <project-dir>` to match the feature version to the repository's version file (see `templates/rails/adopt`)
+* `scaffold/.devcontainer/devcontainer.json`: the features (e.g. `ghcr.io/devcontainers/features/go:1`). If no published feature supports the version you need, write a local one in `.devcontainer/<name>/` (`devcontainer-feature.json` + `install.sh`; see `templates/rails` and `templates/fastapi`). For a stack whose app is generated by a tool (like `rails new` or `gradle init`), use `postCreateCommand` to run an idempotent `just init` recipe that never runs over existing code (see `templates/rails` and `templates/java`).
+* `scaffold/justfile`: what the five contract recipes run. Keep them generic enough for adopted repositories.
+* `scaffold/compose.yaml`: the app port, if not 3000.
+* `starter/`: a minimal working app with a test, the production `Dockerfile` stub, the README. Files that only fit the sample app belong here, not in `scaffold/`.
+* optional `adopt` (executable): called by `new-project --from` as `adopt <project-dir>`, only when it copied `devcontainer.json`, to match the feature version to the repository's version file (see `templates/rails/adopt`) or its build tool (see `templates/java/adopt`).
 
 Placeholders replaced in every file by `new-project`:
 

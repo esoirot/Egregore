@@ -11,9 +11,10 @@ default:
 install:
     uv sync
 
-# Start the app on port 3000 with reload (reachable on the host at APP_PORT)
+# Start the app on port 3000 with reload (reachable on the host at APP_PORT).
+# FastAPI finds the app in main.py, app.py, api.py or app/{main,app,api}.py.
 dev:
-    uv run fastapi dev app/main.py --host 0.0.0.0 --port 3000
+    uv run fastapi dev --host 0.0.0.0 --port 3000
 
 # Run tests
 test *args:
@@ -24,7 +25,7 @@ lint:
     uv run ruff check .
     uv run ruff format --check .
 
-# Verify the lockfile and byte-compile the app
+# Verify the lockfile and byte-compile the project
 build:
     uv lock --check
-    uv run python -m compileall -q app
+    uv run python -m compileall -q -x '\.venv' .

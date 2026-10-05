@@ -48,6 +48,9 @@ jobs:
       - name: new-project behavior tests
         run: tests/new-project-from
 
+      - name: dev behavior tests
+        run: tests/dev
+
       - name: Generate and start a project from every template
         env:
           PROJECTS_DIR: ${{ runner.temp }}/projects

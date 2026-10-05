@@ -33,7 +33,15 @@ devcontainer() {
 }
 
 case "${1:-}" in
-    up)    devcontainer up ;;
+    up)
+        # A failed start can leave a half-created container that a retry would
+        # start without its port; remove it so the next dev up starts fresh.
+        if ! devcontainer up; then
+            docker compose down >/dev/null 2>&1 || true
+            echo "dev up failed; cleaned up. If the port was in use, change APP_PORT in .env and rerun dev up." >&2
+            exit 1
+        fi
+        ;;
     shell) devcontainer exec bash ;;
     exec)  shift; [[ $# -gt 0 ]] || usage; devcontainer exec "$@" ;;
     down)  docker compose down ;;

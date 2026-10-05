@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Behavior test for `dev up` cleanup after a failed start (real containers).
+# Uses a minimal project on the base image, without features, to stay fast.
+# Usage: tests/dev
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DEV="$REPO_ROOT/scripts/dev"
+PORT=3917
+BLOCKER=egregore-test-port-blocker
+
+source "$REPO_ROOT/images/base/image.env"
+
+# Under $HOME, not /tmp: the CLI bind-mounts the project path.
+WORK="$(mktemp -d "$HOME/.egregore-test.XXXXXX")"
+PROJECT="$WORK/dev-cleanup-test"
+cleanup() {
+    docker rm -f "$BLOCKER" >/dev/null 2>&1 || true
+    (cd "$PROJECT" 2>/dev/null && docker compose down >/dev/null 2>&1) || true
+    # The CLI builds a uid-remapping image per run (name depends on the temp path).
+    docker images --format '{{.Repository}}' | grep '^vsc-dev-cleanup-test-' | xargs -r docker image rm >/dev/null 2>&1 || true
+    rm -rf "$WORK"
+}
+trap cleanup EXIT
+
+mkdir -p "$PROJECT/.devcontainer"
+cat > "$PROJECT/compose.yaml" <<YAML
+name: dev-cleanup-test
+services:
+  dev:
+    image: $IMAGE
+    ports:
+      - "127.0.0.1:\${APP_PORT:-3000}:3000"
+    command: sleep infinity
+YAML
+cat > "$PROJECT/.devcontainer/devcontainer.json" <<'JSON'
+{ "dockerComposeFile": "../compose.yaml", "service": "dev", "workspaceFolder": "/workspace", "shutdownAction": "none" }
+JSON
+echo "APP_PORT=$PORT" > "$PROJECT/.env"
+cd "$PROJECT"
+
+containers() { docker ps -a --filter label=com.docker.compose.project=dev-cleanup-test --format '{{.Names}}'; }
+
+echo "Given APP_PORT $PORT is already taken on the host"
+docker run -d --name "$BLOCKER" -p "127.0.0.1:$PORT:80" "$IMAGE" sleep infinity >/dev/null
+
+echo "When I run dev up"
+if "$DEV" up > "$WORK/up1.log" 2>&1; then
+    echo "✗ dev up succeeded despite the port conflict"; exit 1
+fi
+grep -q "cleaned up" "$WORK/up1.log" || { echo "✗ no cleanup hint"; tail -5 "$WORK/up1.log"; exit 1; }
+[[ -z "$(containers)" ]] || { echo "✗ containers left after failed dev up: $(containers)"; exit 1; }
+echo "✓ it fails with the cleanup hint and leaves no container"
+
+echo "When the port is freed and I run dev up again"
+docker rm -f "$BLOCKER" >/dev/null
+"$DEV" up > "$WORK/up2.log" 2>&1 || { echo "✗ second dev up failed"; tail -5 "$WORK/up2.log"; exit 1; }
+PORTS="$(docker ps --filter label=com.docker.compose.project=dev-cleanup-test --format '{{.Ports}}')"
+[[ "$PORTS" == *"127.0.0.1:$PORT->3000/tcp"* ]] || { echo "✗ port not published: '$PORTS'"; exit 1; }
+echo "✓ the container publishes 127.0.0.1:$PORT->3000"
