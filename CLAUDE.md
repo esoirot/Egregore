@@ -12,12 +12,14 @@ Guiding principle: the Ubuntu host only has git and Docker; everything else (run
 
 ## Commands
 
-There is no build system or test suite. CI (`.github/workflows/images.yml`) runs `shellcheck --severity=warning` (SC1091 infos from dynamic `source` paths are expected) on `scripts/*`, `images/*/validate` and local feature `install.sh` files, builds and validates every image, then runs `new-project` for every template and `dev exec just --list` in the result. Locally:
+There is no build system. `tests/new-project-from` is the behavior suite for `new-project` (plain Bash, given/when/then scenarios against local fixture repos; `scripts/dev` is stubbed in a sandbox copy of the repo; needs the base image locally; ~10 s). CI (`.github/workflows/images.yml`) runs `shellcheck --severity=warning` (SC1091 infos from dynamic `source` paths are expected) on `scripts/*`, `tests/*`, `images/*/validate`, `templates/*/adopt` and local feature `install.sh` files, builds and validates every image, runs `tests/new-project-from`, then runs `new-project` for every template and `dev exec just --list` in the result. Locally:
 
 ```bash
 ./scripts/bootstrap                   # host setup: git, Docker Engine + Compose (Docker apt repo), WSL systemd, docker group
 ./scripts/install                     # check prereqs, add scripts/ to PATH, build + validate every image (PULL_IMAGES=1 to pull from GHCR)
 new-project <template> <name>         # generate ~/projects/<name> (override with PROJECTS_DIR), then `dev up`
+new-project <template> <name> --from <git-url|path>   # clone an existing repo, add the dev environment around it
+tests/new-project-from                # run the new-project behavior suite
 dev up | shell | exec <cmd> | down    # per-project, from the project root
 ```
 
@@ -28,7 +30,7 @@ dev up | shell | exec <cmd> | down    # per-project, from the project root
 - An image is any `images/<name>/` with `Dockerfile` + `image.env` (defines `IMAGE`, versioned tag) + optional executable `validate <image>`. `install` and CI build all of them.
   - `base`: Ubuntu 26.04 pinned by digest, non-root `dev` user (uid 1000; the stock `ubuntu` user is removed to free it), passwordless sudo, git, build-essential, `just`. No language runtime.
   - `devcontainer-cli`: `docker:<ver>-cli` + `@devcontainers/cli` (pinned), entrypoint `devcontainer`.
-- A template is any `templates/<name>/scaffold/`. No image, no script. It is copied once (dotfiles included) into a new project; `{{PROJECT_NAME}}` and `{{IMAGE}}` (from `images/base/image.env`) are replaced by `sed`. The scaffold contains:
+- A template is any `templates/<name>/scaffold/`, plus an optional executable `templates/<name>/adopt` hook (see `new-project --from` below). It is copied once (dotfiles included) into a new project; `{{PROJECT_NAME}}` and `{{IMAGE}}` (from `images/base/image.env`) are replaced by `sed`. The scaffold contains:
   - `.devcontainer/devcontainer.json`: `dockerComposeFile: ../compose.yaml`, service `dev`, `remoteUser: dev`, and the stack as Dev Container Features (pinned versions). Local features live in `.devcontainer/<name>/` (`devcontainer-feature.json` + `install.sh`, run as root; `_REMOTE_USER` available).
   - `compose.yaml`: top-level `name: {{PROJECT_NAME}}`, service `dev` on the base image, `sleep infinity`, port `127.0.0.1:${APP_PORT:-3000}:3000`.
   - `justfile`: the command contract `install`, `dev`, `test`, `lint`, `build` (plus `init` where the app is generated).
@@ -40,7 +42,7 @@ dev up | shell | exec <cmd> | down    # per-project, from the project root
   - `node`: official node feature, Node 26.10.0, pnpm 12.9.1. Ships a working app on Node built-ins (`src/app.js` exports `createApp`, `src/main.js` listens on 3000) and `node:test` tests; `postCreateCommand: just install`. `justfile` delegates to `package.json` scripts: `dev` = `node --watch`, `test` = `node --test`, `lint` = `biome check .` (Biome 2.5.15; `biome.json` only sets space indentation, since Biome defaults to tabs), `build` = `node --check` (no bundler).
   - `rails`: local `ruby` feature compiles Ruby 4.0.7 with ruby-build into `/opt/ruby` owned by `dev` (the official rvm-based ruby feature rejects Ruby 4) and installs `tzdata` (base image lacks it; Rails needs it to boot). `postCreateCommand: just init`: if no `Gemfile`, installs Rails 8.1.4 and runs `rails new . --name=<project> --skip` (keeps scaffold files, adds `!/.env.example` to the Rails `.gitignore`), then `bundle install`. `just build` precompiles assets in production mode then clobbers them, because a dev-mode precompile makes `just dev` serve stale assets.
 - `scripts/dev` runs the CLI image with `/var/run/docker.sock` mounted and `$PWD` mounted at the same path (the CLI passes host paths to the daemon). `--workspace-folder` must come before the exec command. `down` is plain `docker compose down` (works because compose sets `name:`).
-- `scripts/new-project` validates names (project names lowercase: they are compose project names), requires the base image locally, copies the scaffold, substitutes, seeds `.env` from `.env.example` (honoring `APP_PORT=<port> new-project ...`), then runs `dev up`. If the host port is taken, `dev up` fails; a retry without `dev down` starts the half-created container without its port.
+- `scripts/new-project` validates names (project names lowercase: they are compose project names), requires the base image locally, creates the folder (or `git clone`s it with `--from`), copies only scaffold files that do not exist yet, substitutes placeholders only in those copied files (repo code may contain `{{...}}`), runs the template's optional `templates/<name>/adopt <project-dir>` hook only if it copied `.devcontainer/devcontainer.json` (otherwise prints a note), seeds `.env` from `.env.example` if missing and ensures `APP_PORT` (honoring `APP_PORT=<port> new-project ...`, default 3000), lists the added files with `--from`, then runs `dev up`. `adopt` hooks (`rails`: `.ruby-version`; `node`: `.nvmrc`/`.node-version`; `java`: `.sdkmanrc` `java=`/`gradle=`) edit the feature version in the copied `devcontainer.json` with `sed`; fastapi needs none (uv reads `.python-version`). `init` recipes must stay safe on existing code: rails skips `rails new` if a `Gemfile` exists, java skips `gradle init` if any `settings.gradle(.kts)`, `build.gradle(.kts)` or `pom.xml` exists. If the host port is taken, `dev up` fails; a retry without `dev down` starts the half-created container without its port.
 - `scripts/install` appends `export PATH="<repo>/scripts:$PATH"` to `~/.bashrc`, using the actual clone location.
 - Adding a template needs no script changes; the README section "Adding a New Template" is the user-facing guide.
 

@@ -94,10 +94,13 @@ dev-environment/
 │           ├── .env.example
 │           └── README.md
 │
+├── tests/
+│   └── new-project-from       # behavior tests for new-project (stubbed dev, local fixture repos)
+│
 ├── scripts/
 │   ├── bootstrap              # host setup (Docker Engine, systemd, docker group)
 │   ├── install                # PATH + build/validate images
-│   ├── new-project            # generate a project from a template
+│   ├── new-project            # generate a project from a template, or adopt a repo (--from)
 │   └── dev                    # per-project entry point
 │
 ├── .github/workflows/
@@ -128,7 +131,7 @@ One directory per stack preset. A template is only a `scaffold/`: no image, no s
 
 ### `.github/workflows/images.yml`
 
-On every pull request and push to `main`: `shellcheck` on the scripts and local feature installers, build and validate every image, then generate a project from every template and run `just --list` inside it.
+On every pull request and push to `main`: `shellcheck` on the scripts, tests, adopt hooks and local feature installers; build and validate every image; run `tests/new-project-from`; then generate a project from every template and run `just --list` inside it.
 
 Publishing to GitHub Container Registry (GHCR) is **disabled**. To enable it:
 
@@ -203,6 +206,28 @@ PROJECTS_DIR=~/work new-project node my-poc
 ```bash
 APP_PORT=3100 new-project node my-poc
 ```
+
+## Adopting an Existing Repository
+
+To work on an existing repository in this environment, clone it through `new-project` with `--from`:
+
+```bash
+new-project rails my-app --from git@github.com:org/my-app.git
+APP_PORT=3100 new-project rails my-app --from ~/src/my-app    # a local path works too
+```
+
+It clones the repository into `~/projects/my-app`, then adds the template's dev environment around the code:
+
+* **Repository files always win.** Scaffold files are copied only where the repository has none (its `README.md`, `.gitignore`, `justfile`, `.devcontainer/` are kept).
+* **Placeholders are filled only in the copied files**, never in the repository's code.
+* **Runtime version follows the repository**: `.ruby-version` (rails), `.nvmrc` or `.node-version` (node), `.sdkmanrc` `java=` / `gradle=` (java). For fastapi, uv reads `.python-version` directly. Without a version file, the template's pin is kept.
+* **Generators never run over existing code**: `rails new` is skipped when a `Gemfile` exists, `gradle init` when any Gradle or Maven build exists.
+* **`.env`** is created from `.env.example` if missing, and `APP_PORT` is added if the repository's example lacks it.
+* The copied files are listed at the end. They stay **untracked**: commit them if the team adopts this setup, or list them in `.git/info/exclude` to keep them local.
+
+Still manual: database and other services (add them to `compose.yaml`), and `just` recipes that do not match the repository's tooling (for example a Maven project with the Gradle-based `java` recipes).
+
+If the repository has its own `.devcontainer/devcontainer.json`, it is kept and `new-project` prints a note: merge it with the template's by hand.
 
 ---
 
@@ -357,6 +382,7 @@ Start from `templates/node/scaffold/` and change:
 * `justfile`: what the five contract recipes run
 * `Dockerfile`, `.gitignore`, `.dockerignore`, `README.md`: stack-specific content
 * `compose.yaml`: the app port, if not 3000
+* optional `templates/go/adopt` (executable, next to `scaffold/`): called by `new-project --from` as `adopt <project-dir>` to match the feature version to the repository's version file (see `templates/rails/adopt`)
 
 Placeholders replaced in every file by `new-project`:
 
