@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Called by `new-project --from` as: adopt <project-dir>.
+# Matches the Ruby feature version to the repository's .ruby-version.
+set -euo pipefail
+
+cd "$1"
+[[ -f .ruby-version ]] || exit 0
+
+VERSION="$(tr -d '[:space:]' < .ruby-version)"
+VERSION="${VERSION#ruby-}"
+
+sed -i "/\"\.\/ruby\"/,/}/ s|\"version\": \"[^\"]*\"|\"version\": \"$VERSION\"|" .devcontainer/devcontainer.json
+echo "Ruby $VERSION (from .ruby-version)"

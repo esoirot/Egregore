@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: shellcheck --severity=warning scripts/* images/*/validate templates/*/scaffold/.devcontainer/*/install.sh
+      - run: shellcheck --severity=warning scripts/* tests/* images/*/validate templates/*/adopt templates/*/scaffold/.devcontainer/*/install.sh
 
   images:
     needs: shellcheck
@@ -44,6 +44,9 @@ jobs:
             if [[ -x "$dir/validate" ]]; then "$dir/validate" "$IMAGE"; fi
             if [[ "$PUSH" == "true" ]]; then docker push "$IMAGE"; fi
           done
+
+      - name: new-project behavior tests
+        run: tests/new-project-from
 
       - name: Generate and start a project from every template
         env:

@@ -1,0 +1,216 @@
+#!/usr/bin/env bash
+# Behavior tests for `new-project <template> <name> --from <repo>`.
+# Runs new-project against local fixture repos, with scripts/dev stubbed out
+# (records calls instead of starting containers). Needs the base image locally.
+# Usage: tests/new-project-from
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Under $HOME, not /tmp: the java scenario bind-mounts it into a container.
+WORK="$(mktemp -d "$HOME/.egregore-test.XXXXXX")"
+trap 'rm -rf "$WORK"' EXIT
+
+# Sandbox copy of this repo (git-visible files only) with a stub dev script.
+SANDBOX="$WORK/egregore"
+mkdir -p "$SANDBOX"
+git -C "$REPO_ROOT" ls-files -co --exclude-standard | tar -C "$REPO_ROOT" -cf - -T - | tar -C "$SANDBOX" -xf -
+cat > "$SANDBOX/scripts/dev" <<'EOF'
+#!/usr/bin/env bash
+echo "$PWD $*" >> "$DEV_LOG"
+EOF
+chmod +x "$SANDBOX/scripts/dev"
+
+NEW_PROJECT="$SANDBOX/scripts/new-project"
+export PROJECTS_DIR="$WORK/projects"
+export DEV_LOG="$WORK/dev.log"
+mkdir -p "$PROJECTS_DIR"
+
+source "$SANDBOX/images/base/image.env"
+BASE_IMAGE="$IMAGE"
+
+# make_repo <dir> <path>=<content>... : a committed git repo with the given files.
+make_repo() {
+    local dir="$1"; shift
+    mkdir -p "$dir"
+    git -C "$dir" init -q
+    local spec path
+    for spec in "$@"; do
+        path="${spec%%=*}"
+        mkdir -p "$dir/$(dirname "$path")"
+        printf '%s\n' "${spec#*=}" > "$dir/$path"
+    done
+    git -C "$dir" add -A
+    git -C "$dir" -c user.name=test -c user.email=test@example.com commit -q -m init
+}
+
+feature_version() { # feature_version <project> <feature-key-fragment>
+    sed -n "/$2/,/}/ s|.*\"version\": \"\([^\"]*\)\".*|\1|p" "$1/.devcontainer/devcontainer.json" | head -1
+}
+
+PASSED=0
+FAILED=0
+# fails <cmd...>: succeed only if the command fails (`! cmd` does not trip set -e).
+fails() {
+    if "$@"; then return 1; fi
+}
+
+scenario() {
+    local name="$1" rc; shift
+    # Not inside `if`: set -e is ignored in conditions, even in subshells.
+    set +e
+    ( set -euo pipefail; "$@" ) > "$WORK/out" 2>&1
+    rc=$?
+    set -e
+    if [[ "$rc" -eq 0 ]]; then
+        PASSED=$((PASSED + 1)); echo "✓ $name"
+    else
+        FAILED=$((FAILED + 1)); echo "✗ $name"; sed 's/^/    /' "$WORK/out"
+    fi
+}
+
+adopt_rails_repo() {
+    make_repo "$WORK/src/rails-app" "Gemfile=source 'https://rubygems.org'" ".ruby-version=3.3.6"
+    "$NEW_PROJECT" rails rails-app --from "$WORK/src/rails-app"
+    local p="$PROJECTS_DIR/rails-app"
+    [[ "$(git -C "$p" log --format=%s)" == "init" ]]
+    [[ -f "$p/.devcontainer/devcontainer.json" && -f "$p/compose.yaml" && -f "$p/justfile" ]]
+    [[ -x "$p/.devcontainer/ruby/install.sh" ]]
+    [[ "$(feature_version "$p" '"\.\/ruby"')" == "3.3.6" ]]
+    grep -qx "$p up" "$DEV_LOG"
+}
+
+repo_files_never_overwritten() {
+    make_repo "$WORK/src/keep" "README.md=# Mine" ".gitignore=my-ignore" "justfile=mine:" "Gemfile=x"
+    "$NEW_PROJECT" rails keep --from "$WORK/src/keep"
+    local f
+    for f in README.md .gitignore justfile; do
+        cmp "$WORK/src/keep/$f" "$PROJECTS_DIR/keep/$f"
+    done
+}
+
+placeholders_in_repo_code_untouched() {
+    make_repo "$WORK/src/tpl" "views/page.hbs={{PROJECT_NAME}} {{IMAGE}}" "Gemfile=x"
+    "$NEW_PROJECT" rails tpl --from "$WORK/src/tpl"
+    local p="$PROJECTS_DIR/tpl"
+    [[ "$(cat "$p/views/page.hbs")" == "{{PROJECT_NAME}} {{IMAGE}}" ]]
+    grep -qx "name: tpl" "$p/compose.yaml"
+    grep -q "image: $BASE_IMAGE" "$p/compose.yaml"
+}
+
+java_init_never_clobbers_maven() {
+    make_repo "$WORK/src/mvn" "pom.xml=<project/>"
+    "$NEW_PROJECT" java mvn --from "$WORK/src/mvn"
+    local p="$PROJECTS_DIR/mvn"
+    # The base image has no gradle: if the guard let `gradle init` run, this fails.
+    docker run --rm -v "$p:/workspace" "$BASE_IMAGE" just init
+    [[ "$(cat "$p/pom.xml")" == "<project/>" ]]
+    [[ ! -e "$p/settings.gradle.kts" ]]
+}
+
+app_port_with_repo_env_example() {
+    make_repo "$WORK/src/envx" ".env.example=FOO=bar" "Gemfile=x"
+    APP_PORT=3100 "$NEW_PROJECT" rails envx --from "$WORK/src/envx"
+    grep -qx "FOO=bar" "$PROJECTS_DIR/envx/.env"
+    grep -qx "APP_PORT=3100" "$PROJECTS_DIR/envx/.env"
+}
+
+app_port_defaults_when_repo_example_lacks_it() {
+    make_repo "$WORK/src/envd" ".env.example=FOO=bar" "Gemfile=x"
+    "$NEW_PROJECT" rails envd --from "$WORK/src/envd"
+    grep -qx "APP_PORT=3000" "$PROJECTS_DIR/envd/.env"
+}
+
+no_version_file_keeps_template_pin() {
+    make_repo "$WORK/src/nover" "Gemfile=x"
+    "$NEW_PROJECT" rails nover --from "$WORK/src/nover"
+    [[ "$(feature_version "$PROJECTS_DIR/nover" '"\.\/ruby"')" == \
+       "$(feature_version "$SANDBOX/templates/rails/scaffold" '"\.\/ruby"')" ]]
+}
+
+node_version_from_nvmrc() {
+    make_repo "$WORK/src/nvm" ".nvmrc=v24.11.0" "package.json={}"
+    "$NEW_PROJECT" node nvm --from "$WORK/src/nvm"
+    [[ "$(feature_version "$PROJECTS_DIR/nvm" 'features\/node')" == "24.11.0" ]]
+}
+
+node_version_from_node_version_file() {
+    make_repo "$WORK/src/nodev" ".node-version=22" "package.json={}"
+    "$NEW_PROJECT" node nodev --from "$WORK/src/nodev"
+    [[ "$(feature_version "$PROJECTS_DIR/nodev" 'features\/node')" == "22" ]]
+}
+
+java_version_from_sdkmanrc() {
+    make_repo "$WORK/src/sdk" ".sdkmanrc=java=21.0.5-tem" "pom.xml=<project/>"
+    "$NEW_PROJECT" java sdk --from "$WORK/src/sdk"
+    local json="$PROJECTS_DIR/sdk/.devcontainer/devcontainer.json"
+    grep -q '"version": "21.0.5-tem"' "$json"
+    grep -q '"jdkDistro": "tem"' "$json"
+}
+
+repo_devcontainer_is_kept_and_reported() {
+    make_repo "$WORK/src/own" ".devcontainer/devcontainer.json={\"name\": \"theirs\"}" ".ruby-version=3.2.0" "Gemfile=x"
+    "$NEW_PROJECT" rails own --from "$WORK/src/own" > "$WORK/own.out"
+    [[ "$(cat "$PROJECTS_DIR/own/.devcontainer/devcontainer.json")" == '{"name": "theirs"}' ]]
+    grep -q "kept the repository's .devcontainer/devcontainer.json" "$WORK/own.out"
+}
+
+added_files_are_listed() {
+    make_repo "$WORK/src/list" "Gemfile=x"
+    "$NEW_PROJECT" rails list --from "$WORK/src/list" > "$WORK/list.out"
+    grep -q "compose.yaml" "$WORK/list.out"
+    grep -q ".devcontainer/devcontainer.json" "$WORK/list.out"
+    [[ -n "$(git -C "$PROJECTS_DIR/list" status --porcelain -- compose.yaml)" ]]
+}
+
+existing_target_fails_without_cloning() {
+    make_repo "$WORK/src/dup" "Gemfile=x"
+    mkdir -p "$PROJECTS_DIR/dup"
+    fails "$NEW_PROJECT" rails dup --from "$WORK/src/dup" > "$WORK/dup.out" 2>&1
+    grep -q "project already exists" "$WORK/dup.out"
+    [[ -z "$(ls -A "$PROJECTS_DIR/dup")" ]]
+}
+
+clone_failure_leaves_nothing() {
+    fails "$NEW_PROJECT" rails gone --from "$WORK/src/does-not-exist" > /dev/null 2>&1
+    [[ ! -e "$PROJECTS_DIR/gone" ]]
+}
+
+plain_new_project_unchanged() {
+    APP_PORT=3200 "$NEW_PROJECT" node plain
+    local p="$PROJECTS_DIR/plain"
+    [[ ! -e "$p/.git" ]]
+    [[ -f "$p/package.json" && -f "$p/src/app.js" && -f "$p/.devcontainer/devcontainer.json" ]]
+    grep -qx "name: plain" "$p/compose.yaml"
+    grep -q '"name": "plain"' "$p/package.json"
+    fails grep -rq "{{PROJECT_NAME}}\|{{IMAGE}}" "$p"
+    grep -qx "APP_PORT=3200" "$p/.env"
+    grep -qx "$p up" "$DEV_LOG"
+}
+
+usage_rejects_incomplete_from() {
+    fails "$NEW_PROJECT" rails x --from > /dev/null 2>&1
+    fails "$NEW_PROJECT" rails x --bogus y > /dev/null 2>&1
+    [[ ! -e "$PROJECTS_DIR/x" ]]
+}
+
+scenario "Adopt a Rails repo" adopt_rails_repo
+scenario "Repo files are never overwritten" repo_files_never_overwritten
+scenario "Placeholders in repo code are untouched" placeholders_in_repo_code_untouched
+scenario "Java generator never clobbers an existing Maven build" java_init_never_clobbers_maven
+scenario "APP_PORT is honored with the repo's own .env.example" app_port_with_repo_env_example
+scenario "APP_PORT defaults to 3000 when the repo's example lacks it" app_port_defaults_when_repo_example_lacks_it
+scenario "No version file keeps the template pin" no_version_file_keeps_template_pin
+scenario "Node version from .nvmrc" node_version_from_nvmrc
+scenario "Node version from .node-version" node_version_from_node_version_file
+scenario "Java version from .sdkmanrc" java_version_from_sdkmanrc
+scenario "Repo's own devcontainer.json is kept and reported" repo_devcontainer_is_kept_and_reported
+scenario "Added files are listed and stay untracked" added_files_are_listed
+scenario "Existing target folder fails without cloning" existing_target_fails_without_cloning
+scenario "Clone failure leaves nothing behind" clone_failure_leaves_nothing
+scenario "Plain new-project unchanged" plain_new_project_unchanged
+scenario "Incomplete or unknown options are rejected" usage_rejects_incomplete_from
+
+echo
+echo "$PASSED passed, $FAILED failed"
+[[ "$FAILED" -eq 0 ]]

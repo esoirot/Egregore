@@ -7,9 +7,13 @@ PROJECTS_DIR="${PROJECTS_DIR:-$HOME/projects}"
 
 TEMPLATE="${1:-}"
 PROJECT_NAME="${2:-}"
+FROM_REPO=""
 
 usage() {
-    echo "Usage: new-project <template> <project-name>"
+    echo "Usage: new-project <template> <project-name> [--from <git-url|path>]"
+    echo
+    echo "  --from    clone an existing repository and add the template's dev environment"
+    echo "            around it; files from the repository are never overwritten"
     echo
     echo "Available templates:"
     for dir in "$TEMPLATES_DIR"/*/; do
@@ -19,6 +23,11 @@ usage() {
     echo "Project names allow lowercase letters, numbers, underscores and hyphens."
     exit 1
 }
+
+if [[ $# -gt 2 ]]; then
+    [[ $# -eq 4 && "$3" == "--from" && -n "$4" ]] || usage
+    FROM_REPO="$4"
+fi
 
 if [[ ! "$TEMPLATE" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
     usage
@@ -54,24 +63,59 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     exit 1
 fi
 
-mkdir -p "$PROJECT_ROOT"
-cp -R "$TEMPLATE_DIR/scaffold/." "$PROJECT_ROOT/"
-
-find "$PROJECT_ROOT" -type f -exec sed -i \
-    -e "s|{{PROJECT_NAME}}|$PROJECT_NAME|g" \
-    -e "s|{{IMAGE}}|$IMAGE|g" \
-    {} +
-
-echo "Created $TEMPLATE project: $PROJECT_ROOT"
+if [[ -n "$FROM_REPO" ]]; then
+    git clone "$FROM_REPO" "$PROJECT_ROOT"
+else
+    mkdir -p "$PROJECT_ROOT"
+fi
 
 cd "$PROJECT_ROOT"
 
-# Seed .env so the host port is set before the first dev up (APP_PORT=<port> new-project ...).
-if [[ -f .env.example ]]; then
-    cp .env.example .env
-    if [[ -n "${APP_PORT:-}" ]]; then
-        sed -i "s|^APP_PORT=.*|APP_PORT=$APP_PORT|" .env
+# Copy scaffold files the project does not have yet; existing files always win.
+ADDED=()
+while IFS= read -r -d '' FILE; do
+    FILE="${FILE#./}"
+    [[ -e "$FILE" ]] && continue
+    mkdir -p "$(dirname "$FILE")"
+    cp -p "$TEMPLATE_DIR/scaffold/$FILE" "$FILE"
+    ADDED+=("$FILE")
+done < <(cd "$TEMPLATE_DIR/scaffold" && find . -type f -print0 | sort -z)
+
+# Only in copied files: repository code may contain the same placeholders.
+for FILE in "${ADDED[@]}"; do
+    sed -i -e "s|{{PROJECT_NAME}}|$PROJECT_NAME|g" -e "s|{{IMAGE}}|$IMAGE|g" "$FILE"
+done
+
+if [[ " ${ADDED[*]} " == *" .devcontainer/devcontainer.json "* ]]; then
+    # Match the dev container to the repository's runtime version files.
+    if [[ -x "$TEMPLATE_DIR/adopt" ]]; then
+        "$TEMPLATE_DIR/adopt" "$PROJECT_ROOT"
     fi
+else
+    echo "Note: kept the repository's .devcontainer/devcontainer.json; it may not follow the $TEMPLATE template."
+fi
+
+echo "Created $TEMPLATE project: $PROJECT_ROOT"
+
+# Seed .env so the host port is set before the first dev up (APP_PORT=<port> new-project ...).
+if [[ ! -f .env && -f .env.example ]]; then
+    cp .env.example .env
+fi
+if [[ -f .env ]]; then
+    if grep -q '^APP_PORT=' .env; then
+        if [[ -n "${APP_PORT:-}" ]]; then
+            sed -i "s|^APP_PORT=.*|APP_PORT=$APP_PORT|" .env
+        fi
+    else
+        [[ -z "$(tail -c 1 .env)" ]] || echo >> .env
+        echo "APP_PORT=${APP_PORT:-3000}" >> .env
+    fi
+fi
+
+if [[ -n "$FROM_REPO" ]]; then
+    echo
+    echo "Added from the $TEMPLATE template (untracked in the repository; commit them or not):"
+    printf '  %s\n' "${ADDED[@]}"
 fi
 
 "$REPO_ROOT/scripts/dev" up

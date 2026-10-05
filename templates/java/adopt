@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Called by `new-project --from` as: adopt <project-dir>.
+# Matches the JDK and Gradle versions to the repository's .sdkmanrc (java=..., gradle=...).
+set -euo pipefail
+
+cd "$1"
+[[ -f .sdkmanrc ]] || exit 0
+
+JSON=.devcontainer/devcontainer.json
+JAVA="$(sed -n 's/^java=\([^[:space:]]*\).*/\1/p' .sdkmanrc)"
+GRADLE="$(sed -n 's/^gradle=\([^[:space:]]*\).*/\1/p' .sdkmanrc)"
+
+if [[ -n "$JAVA" ]]; then
+    sed -i "s|\"version\": \"[^\"]*\"|\"version\": \"$JAVA\"|" "$JSON"
+    # SDKMAN identifiers end with the distribution, e.g. 21.0.5-tem.
+    if [[ "$JAVA" == *-* ]]; then
+        sed -i "s|\"jdkDistro\": \"[^\"]*\"|\"jdkDistro\": \"${JAVA##*-}\"|" "$JSON"
+    fi
+    echo "JDK $JAVA (from .sdkmanrc)"
+fi
+if [[ -n "$GRADLE" ]]; then
+    sed -i "s|\"gradleVersion\": \"[^\"]*\"|\"gradleVersion\": \"$GRADLE\"|" "$JSON"
+    echo "Gradle $GRADLE (from .sdkmanrc)"
+fi
