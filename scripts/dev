@@ -27,7 +27,11 @@ devcontainer() {
     [[ -t 0 && -t 1 ]] && tty=(-t)
 
     # Same path inside and outside: the CLI passes it to the host Docker daemon.
+    # Run as the host user (plus the socket's group): the CLI remaps the container's
+    # dev user to its own uid, so as root it would leave dev unable to write /workspace
+    # whenever the host uid is not 1000.
     docker run --rm -i "${tty[@]}" \
+        --user "$(id -u):$(id -g)" --group-add "$(stat -c %g /var/run/docker.sock)" -e HOME=/tmp \
         -v /var/run/docker.sock:/var/run/docker.sock \
         -v "$PWD:$PWD" -w "$PWD" \
         "$IMAGE" "$1" --workspace-folder "$PWD" "${@:2}"

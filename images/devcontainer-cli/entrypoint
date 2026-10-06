@@ -1,0 +1,14 @@
+#!/bin/sh
+# scripts/dev runs this image as the host user, who has no account here, but the
+# Dev Containers CLI needs one (id -un). /etc/passwd and /etc/group are writable
+# in this image (it only lives for one command), so register the user first.
+set -eu
+
+if ! id -un > /dev/null 2>&1; then
+    echo "host:x:$(id -u):$(id -g):host:${HOME:-/tmp}:/bin/sh" >> /etc/passwd
+fi
+if ! id -gn > /dev/null 2>&1; then
+    echo "host:x:$(id -g):" >> /etc/group
+fi
+
+exec devcontainer "$@"

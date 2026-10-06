@@ -14,11 +14,19 @@ source "$REPO_ROOT/images/base/image.env"
 # Under $HOME, not /tmp: the CLI bind-mounts the project path.
 WORK="$(mktemp -d "$HOME/.egregore-test.XXXXXX")"
 PROJECT="$WORK/dev-cleanup-test"
+UID_PROJECT="$WORK/dev-uid-test"
+SIM_IMAGE=egregore-test-host-sim
 cleanup() {
     docker rm -f "$BLOCKER" >/dev/null 2>&1 || true
     (cd "$PROJECT" 2>/dev/null && docker compose down --volumes >/dev/null 2>&1) || true
+    (cd "$UID_PROJECT" 2>/dev/null && docker compose down >/dev/null 2>&1) || true
+    # Files written as uid 1001: remove them as root inside a container.
+    if [[ -d "$UID_PROJECT" ]]; then
+        docker run --rm --user 0 -v "$WORK:$WORK" "$IMAGE" rm -rf "$UID_PROJECT" >/dev/null 2>&1 || true
+    fi
+    docker image rm "$SIM_IMAGE" >/dev/null 2>&1 || true
     # The CLI builds a uid-remapping image per run (name depends on the temp path).
-    docker images --format '{{.Repository}}' | grep '^vsc-dev-cleanup-test-' | xargs -r docker image rm >/dev/null 2>&1 || true
+    docker images --format '{{.Repository}}' | grep -E '^vsc-dev-(cleanup|uid)-test-' | xargs -r docker image rm >/dev/null 2>&1 || true
     rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -69,3 +77,32 @@ docker compose exec -T dev bash -c 'exec 3<>/dev/tcp/redis/6379 && printf "PING\
     || { echo "✗ redis not reachable from the dev container"; exit 1; }
 grep -q PONG "$WORK/ping" || { echo "✗ unexpected redis answer: $(cat "$WORK/ping")"; exit 1; }
 echo "✓ the dev container reaches redis by name"
+
+echo "Given a host user whose uid is not the image's dev uid (1001, like GitHub's runner)"
+source "$REPO_ROOT/images/devcontainer-cli/image.env" # IMAGE = CLI image
+CLI_IMAGE="$IMAGE"
+source "$REPO_ROOT/images/base/image.env"            # IMAGE = base image again
+printf 'FROM %s\nRUN apk add --no-cache bash coreutils\n' "$CLI_IMAGE" | docker build -q -t "$SIM_IMAGE" - > /dev/null
+mkdir -p "$UID_PROJECT/.devcontainer"
+cat > "$UID_PROJECT/compose.yaml" <<YAML
+name: dev-uid-test
+services:
+  dev:
+    image: $IMAGE
+    command: sleep infinity
+YAML
+cat > "$UID_PROJECT/.devcontainer/devcontainer.json" <<'JSON'
+{ "dockerComposeFile": "../compose.yaml", "service": "dev", "workspaceFolder": "/workspace", "remoteUser": "dev",
+  "shutdownAction": "none", "postCreateCommand": "id -u > /workspace/dev-uid" }
+JSON
+sed -i 's|    command: sleep infinity|    working_dir: /workspace\n    volumes:\n      - .:/workspace\n    command: sleep infinity|' "$UID_PROJECT/compose.yaml"
+docker run --rm --user 0 -v "$WORK:$WORK" "$IMAGE" chown -R 1001:1001 "$UID_PROJECT"
+
+echo "When that user runs dev up"
+docker run --rm --user 1001:1001 --group-add "$(stat -c %g /var/run/docker.sock)" -e HOME=/tmp \
+    -v /var/run/docker.sock:/var/run/docker.sock -v "$REPO_ROOT:$REPO_ROOT:ro" -v "$WORK:$WORK" \
+    -w "$UID_PROJECT" --entrypoint bash "$SIM_IMAGE" "$DEV" up > "$WORK/up4.log" 2>&1 \
+    || { echo "✗ dev up failed for uid 1001"; grep -v '^\s*at ' "$WORK/up4.log" | tail -6; exit 1; }
+[[ "$(cat "$UID_PROJECT/dev-uid" 2>/dev/null)" == "1001" ]] \
+    || { echo "✗ dev runs as uid '$(cat "$UID_PROJECT/dev-uid" 2>/dev/null)', not the host's 1001"; exit 1; }
+echo "✓ dev is remapped to the host uid and can write the workspace"

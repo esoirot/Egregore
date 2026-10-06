@@ -42,6 +42,7 @@ dev-environment/
 │   │   └── validate
 │   └── devcontainer-cli/      # Dev Containers CLI, used by scripts/dev
 │       ├── Dockerfile
+│       ├── entrypoint         # registers the host user, then runs the CLI
 │       ├── image.env
 │       └── validate
 │
@@ -106,7 +107,7 @@ dev-environment/
 │
 ├── tests/
 │   ├── new-project            # behavior tests for new-project and dev update (stubbed dev, fixture repos)
-│   └── dev                    # dev up cleanup and service reachability (real containers)
+│   └── dev                    # dev up cleanup, services, host uid ≠ 1000 (real containers)
 │
 ├── scripts/
 │   ├── bootstrap              # host setup (Docker Engine, systemd, docker group)
@@ -128,7 +129,7 @@ dev-environment/
 Every directory with an `image.env` (defines `IMAGE`) and a `Dockerfile` is built by `install` and CI. An optional executable `validate <image>` checks the result.
 
 * `base`: Ubuntu 26.04, non-root `dev` user (uid 1000, passwordless sudo), git, build-essential, `just`. No language runtime.
-* `devcontainer-cli`: the [Dev Containers CLI](https://github.com/devcontainers/cli) plus the Docker CLI. `scripts/dev` runs it with the host Docker socket, so the host never needs Node.
+* `devcontainer-cli`: the [Dev Containers CLI](https://github.com/devcontainers/cli) plus the Docker CLI. `scripts/dev` runs it with the host Docker socket, so the host never needs Node. It runs **as your host user**, so the CLI remaps the container's `dev` user to your uid: files in `/workspace` stay yours and writable whatever your uid is (1000 on most WSL setups, 1001 on GitHub's runners).
 
 ### `templates/`
 
