@@ -1,0 +1,523 @@
+#!/usr/bin/env bash
+# Behavior tests for `new-project` (create, --from, --with, --ide, --update / dev update).
+# Runs new-project against local fixture repos, with scripts/dev stubbed out
+# (records calls instead of starting containers) and `code` stubbed. Needs the base image locally.
+# Usage: tests/new-project
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Under $HOME, not /tmp: the java scenario bind-mounts it into a container.
+WORK="$(mktemp -d "$HOME/.egregore-test.XXXXXX")"
+trap 'rm -rf "$WORK"' EXIT
+
+# make_sandbox <dir>: copy of this repo (git-visible files only) with a stub dev script.
+# The real dev script stays available as scripts/dev.real (for `dev update`).
+make_sandbox() {
+    mkdir -p "$1"
+    # ls-files also lists tracked files deleted or moved in the working tree: keep existing ones.
+    git -C "$REPO_ROOT" ls-files -co --exclude-standard \
+        | while IFS= read -r f; do if [[ -e "$REPO_ROOT/$f" ]]; then echo "$f"; fi; done \
+        | tar -C "$REPO_ROOT" -cf - -T - | tar -C "$1" -xf -
+    mv "$1/scripts/dev" "$1/scripts/dev.real"
+    printf '#!/usr/bin/env bash\necho "$PWD $*" >> "$DEV_LOG"\n' > "$1/scripts/dev"
+    chmod +x "$1/scripts/dev"
+}
+
+SANDBOX="$WORK/egregore"
+make_sandbox "$SANDBOX"
+
+# Stub `code` (VS Code CLI): records where it was opened.
+mkdir -p "$WORK/bin"
+printf '#!/usr/bin/env bash\necho "$PWD $*" >> "$CODE_LOG"\n' > "$WORK/bin/code"
+chmod +x "$WORK/bin/code"
+export CODE_LOG="$WORK/code.log"
+touch "$CODE_LOG"
+
+NEW_PROJECT="$SANDBOX/scripts/new-project"
+export PROJECTS_DIR="$WORK/projects"
+export DEV_LOG="$WORK/dev.log"
+mkdir -p "$PROJECTS_DIR"
+
+source "$SANDBOX/images/base/image.env"
+BASE_IMAGE="$IMAGE"
+
+# make_repo <dir> <path>=<content>... : a committed git repo with the given files.
+make_repo() {
+    local dir="$1"; shift
+    mkdir -p "$dir"
+    git -C "$dir" init -q
+    local spec path
+    for spec in "$@"; do
+        path="${spec%%=*}"
+        mkdir -p "$dir/$(dirname "$path")"
+        printf '%s\n' "${spec#*=}" > "$dir/$path"
+    done
+    git -C "$dir" add -A
+    git -C "$dir" -c user.name=test -c user.email=test@example.com commit -q -m init
+}
+
+feature_version() { # feature_version <project> <feature-key-fragment>
+    sed -n "/$2/,/}/ s|.*\"version\": \"\([^\"]*\)\".*|\1|p" "$1/.devcontainer/devcontainer.json" | head -1
+}
+
+PASSED=0
+FAILED=0
+# fails <cmd...>: succeed only if the command fails (`! cmd` does not trip set -e).
+fails() {
+    if "$@"; then return 1; fi
+}
+
+scenario() {
+    local name="$1" rc; shift
+    # Not inside `if`: set -e is ignored in conditions, even in subshells.
+    set +e
+    ( set -euo pipefail; "$@" ) > "$WORK/out" 2>&1
+    rc=$?
+    set -e
+    if [[ "$rc" -eq 0 ]]; then
+        PASSED=$((PASSED + 1)); echo "✓ $name"
+    else
+        FAILED=$((FAILED + 1)); echo "✗ $name"; sed 's/^/    /' "$WORK/out"
+    fi
+}
+
+adopt_rails_repo() {
+    make_repo "$WORK/src/rails-app" "Gemfile=source 'https://rubygems.org'" ".ruby-version=3.3.6"
+    "$NEW_PROJECT" rails rails-app --from "$WORK/src/rails-app"
+    local p="$PROJECTS_DIR/rails-app"
+    [[ "$(git -C "$p" log --format=%s)" == "init" ]]
+    [[ -f "$p/.devcontainer/devcontainer.json" && -f "$p/compose.yaml" && -f "$p/justfile" ]]
+    [[ -x "$p/.devcontainer/ruby/install.sh" ]]
+    [[ "$(feature_version "$p" '"\.\/ruby"')" == "3.3.6" ]]
+    grep -qx "$p up" "$DEV_LOG"
+}
+
+repo_files_never_overwritten() {
+    make_repo "$WORK/src/keep" "README.md=# Mine" ".gitignore=my-ignore" "justfile=mine:" "Gemfile=x"
+    "$NEW_PROJECT" rails keep --from "$WORK/src/keep"
+    local f
+    for f in README.md .gitignore justfile; do
+        cmp "$WORK/src/keep/$f" "$PROJECTS_DIR/keep/$f"
+    done
+}
+
+placeholders_in_repo_code_untouched() {
+    make_repo "$WORK/src/tpl" "views/page.hbs={{PROJECT_NAME}} {{IMAGE}}" "Gemfile=x"
+    "$NEW_PROJECT" rails tpl --from "$WORK/src/tpl"
+    local p="$PROJECTS_DIR/tpl"
+    [[ "$(cat "$p/views/page.hbs")" == "{{PROJECT_NAME}} {{IMAGE}}" ]]
+    grep -qx "name: tpl" "$p/compose.yaml"
+    grep -q "image: $BASE_IMAGE" "$p/compose.yaml"
+}
+
+java_init_never_clobbers_maven() {
+    make_repo "$WORK/src/mvn" "pom.xml=<project/>"
+    "$NEW_PROJECT" java mvn --from "$WORK/src/mvn"
+    local p="$PROJECTS_DIR/mvn"
+    # The base image has no gradle: if the guard let `gradle init` run, this fails.
+    docker run --rm -v "$p:/workspace" "$BASE_IMAGE" just init
+    [[ "$(cat "$p/pom.xml")" == "<project/>" ]]
+    [[ ! -e "$p/settings.gradle.kts" ]]
+}
+
+app_port_with_repo_env_example() {
+    make_repo "$WORK/src/envx" ".env.example=FOO=bar" "Gemfile=x"
+    APP_PORT=3100 "$NEW_PROJECT" rails envx --from "$WORK/src/envx"
+    grep -qx "FOO=bar" "$PROJECTS_DIR/envx/.env"
+    grep -qx "APP_PORT=3100" "$PROJECTS_DIR/envx/.env"
+}
+
+app_port_defaults_when_repo_example_lacks_it() {
+    make_repo "$WORK/src/envd" ".env.example=FOO=bar" "Gemfile=x"
+    "$NEW_PROJECT" rails envd --from "$WORK/src/envd"
+    grep -qx "APP_PORT=3000" "$PROJECTS_DIR/envd/.env"
+}
+
+no_version_file_keeps_template_pin() {
+    make_repo "$WORK/src/nover" "Gemfile=x"
+    "$NEW_PROJECT" rails nover --from "$WORK/src/nover"
+    [[ "$(feature_version "$PROJECTS_DIR/nover" '"\.\/ruby"')" == \
+       "$(feature_version "$SANDBOX/templates/rails/scaffold" '"\.\/ruby"')" ]]
+}
+
+node_version_from_nvmrc() {
+    make_repo "$WORK/src/nvm" ".nvmrc=v24.11.0" "package.json={}"
+    "$NEW_PROJECT" node nvm --from "$WORK/src/nvm"
+    [[ "$(feature_version "$PROJECTS_DIR/nvm" 'features\/node')" == "24.11.0" ]]
+}
+
+node_version_from_node_version_file() {
+    make_repo "$WORK/src/nodev" ".node-version=22" "package.json={}"
+    "$NEW_PROJECT" node nodev --from "$WORK/src/nodev"
+    [[ "$(feature_version "$PROJECTS_DIR/nodev" 'features\/node')" == "22" ]]
+}
+
+java_version_from_sdkmanrc() {
+    make_repo "$WORK/src/sdk" ".sdkmanrc=java=21.0.5-tem" "pom.xml=<project/>"
+    "$NEW_PROJECT" java sdk --from "$WORK/src/sdk"
+    local json="$PROJECTS_DIR/sdk/.devcontainer/devcontainer.json"
+    grep -q '"version": "21.0.5-tem"' "$json"
+    grep -q '"jdkDistro": "tem"' "$json"
+}
+
+repo_devcontainer_is_kept_and_reported() {
+    make_repo "$WORK/src/own" ".devcontainer/devcontainer.json={\"name\": \"theirs\"}" ".ruby-version=3.2.0" "Gemfile=x"
+    "$NEW_PROJECT" rails own --from "$WORK/src/own" > "$WORK/own.out"
+    [[ "$(cat "$PROJECTS_DIR/own/.devcontainer/devcontainer.json")" == '{"name": "theirs"}' ]]
+    grep -q "kept the repository's .devcontainer/devcontainer.json" "$WORK/own.out"
+}
+
+added_files_are_listed() {
+    make_repo "$WORK/src/list" "Gemfile=x"
+    "$NEW_PROJECT" rails list --from "$WORK/src/list" > "$WORK/list.out"
+    grep -q "compose.yaml" "$WORK/list.out"
+    grep -q ".devcontainer/devcontainer.json" "$WORK/list.out"
+    [[ -n "$(git -C "$PROJECTS_DIR/list" status --porcelain -- compose.yaml)" ]]
+}
+
+existing_target_fails_without_cloning() {
+    make_repo "$WORK/src/dup" "Gemfile=x"
+    mkdir -p "$PROJECTS_DIR/dup"
+    fails "$NEW_PROJECT" rails dup --from "$WORK/src/dup" > "$WORK/dup.out" 2>&1
+    grep -q "project already exists" "$WORK/dup.out"
+    [[ -z "$(ls -A "$PROJECTS_DIR/dup")" ]]
+}
+
+clone_failure_leaves_nothing() {
+    fails "$NEW_PROJECT" rails gone --from "$WORK/src/does-not-exist" > /dev/null 2>&1
+    [[ ! -e "$PROJECTS_DIR/gone" ]]
+}
+
+plain_new_project_unchanged() {
+    APP_PORT=3200 "$NEW_PROJECT" node plain
+    local p="$PROJECTS_DIR/plain"
+    [[ ! -e "$p/.git" ]]
+    [[ -f "$p/package.json" && -f "$p/src/app.js" && -f "$p/.devcontainer/devcontainer.json" ]]
+    grep -qx "name: plain" "$p/compose.yaml"
+    grep -q '"name": "plain"' "$p/package.json"
+    fails grep -rq "{{PROJECT_NAME}}\|{{IMAGE}}" "$p"
+    grep -qx "APP_PORT=3200" "$p/.env"
+    grep -qx "$p up" "$DEV_LOG"
+}
+
+# just_dry_run <project> <recipe>: the command a recipe would run, resolved inside the base image.
+# just prints it on stderr; `*args` recipes render with a trailing space.
+just_dry_run() {
+    docker run --rm -v "$1:/workspace" "$BASE_IMAGE" just --dry-run "$2" 2>&1 | sed 's/[[:space:]]*$//'
+}
+
+maven_repo_with_wrapper_uses_mvnw() {
+    make_repo "$WORK/src/mvnw" "pom.xml=<project/>" "mvnw=#!/bin/sh"
+    "$NEW_PROJECT" java mvnw --from "$WORK/src/mvnw"
+    local p="$PROJECTS_DIR/mvnw"
+    [[ "$(just_dry_run "$p" test)" == "./mvnw test" ]]
+    [[ "$(just_dry_run "$p" build)" == "./mvnw package" ]]
+    fails grep -q '"installMaven"' "$p/.devcontainer/devcontainer.json"
+}
+
+maven_repo_without_wrapper_installs_maven() {
+    make_repo "$WORK/src/mvn2" "pom.xml=<project/>"
+    "$NEW_PROJECT" java mvn2 --from "$WORK/src/mvn2"
+    local p="$PROJECTS_DIR/mvn2"
+    [[ "$(just_dry_run "$p" test)" == "mvn test" ]]
+    grep -q '"installMaven": true' "$p/.devcontainer/devcontainer.json"
+}
+
+spring_boot_maven_repo_gets_dev_recipe() {
+    make_repo "$WORK/src/boot" "pom.xml=<plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin>" "mvnw=#!/bin/sh"
+    "$NEW_PROJECT" java boot --from "$WORK/src/boot"
+    [[ "$(just_dry_run "$PROJECTS_DIR/boot" dev)" == "./mvnw spring-boot:run" ]]
+}
+
+plain_maven_repo_dev_explains_main_class() {
+    make_repo "$WORK/src/plainmvn" "pom.xml=<project/>" "mvnw=#!/bin/sh"
+    "$NEW_PROJECT" java plainmvn --from "$WORK/src/plainmvn"
+    local out
+    out="$(docker run --rm -v "$PROJECTS_DIR/plainmvn:/workspace" "$BASE_IMAGE" just dev 2>&1)" && return 1
+    [[ "$out" == *"main class"* ]]
+}
+
+maven_repo_own_justfile_kept() {
+    make_repo "$WORK/src/mvnjf" "pom.xml=<project/>" "justfile=mine:"
+    "$NEW_PROJECT" java mvnjf --from "$WORK/src/mvnjf"
+    cmp "$WORK/src/mvnjf/justfile" "$PROJECTS_DIR/mvnjf/justfile"
+}
+
+gradle_repo_keeps_gradle_recipes() {
+    make_repo "$WORK/src/grd" "settings.gradle.kts=rootProject.name = \"grd\""
+    "$NEW_PROJECT" java grd --from "$WORK/src/grd"
+    [[ "$(just_dry_run "$PROJECTS_DIR/grd" test)" == "./gradlew test" ]]
+}
+
+adopted_repo_gets_no_sample_app() {
+    make_repo "$WORK/src/napp" "package.json={}" "index.js=//"
+    "$NEW_PROJECT" node napp --from "$WORK/src/napp"
+    make_repo "$WORK/src/papp" "pyproject.toml=[project]" "main.py=#"
+    "$NEW_PROJECT" fastapi papp --from "$WORK/src/papp"
+    local f
+    for f in napp/src napp/test napp/biome.json napp/Dockerfile napp/README.md \
+             papp/app papp/tests papp/.python-version papp/Dockerfile papp/README.md; do
+        [[ ! -e "$PROJECTS_DIR/$f" ]] || { echo "unexpected sample file: $f"; return 1; }
+    done
+    [[ -f "$PROJECTS_DIR/napp/compose.yaml" && -f "$PROJECTS_DIR/papp/justfile" ]]
+}
+
+new_fastapi_project_gets_starter() {
+    "$NEW_PROJECT" fastapi fresh
+    local p="$PROJECTS_DIR/fresh"
+    [[ -f "$p/app/main.py" && -f "$p/tests/test_main.py" && -f "$p/Dockerfile" && -f "$p/.python-version" ]]
+    grep -q 'name = "fresh"' "$p/pyproject.toml"
+    grep -q "^# fresh" "$p/README.md"
+}
+
+services_on_new_project() {
+    "$NEW_PROJECT" node svc --with postgres,redis
+    local p="$PROJECTS_DIR/svc"
+    [[ -f "$p/compose.postgres.yaml" && -f "$p/compose.redis.yaml" ]]
+    grep -q '^include:' "$p/compose.yaml"
+    grep -qx '  - compose.postgres.yaml' "$p/compose.yaml"
+    grep -qx '  - compose.redis.yaml' "$p/compose.yaml"
+    grep -q '@sha256:' "$p/compose.postgres.yaml"
+    local f
+    for f in .env .env.example; do
+        grep -qx 'DATABASE_URL=postgres://dev:dev@postgres:5432/dev' "$p/$f"
+        grep -qx 'PGHOST=postgres' "$p/$f"
+        grep -qx 'REDIS_URL=redis://redis:6379/0' "$p/$f"
+    done
+}
+
+unknown_service_fails() {
+    fails "$NEW_PROJECT" node nosvc --with mongo > "$WORK/nosvc.out" 2>&1
+    grep -q "postgres" "$WORK/nosvc.out"
+    [[ ! -e "$PROJECTS_DIR/nosvc" ]]
+}
+
+services_with_adopted_repo() {
+    make_repo "$WORK/src/svcrepo" ".env.example=FOO=bar" "package.json={}"
+    "$NEW_PROJECT" node svcrepo --with postgres --from "$WORK/src/svcrepo"
+    local p="$PROJECTS_DIR/svcrepo"
+    cmp "$WORK/src/svcrepo/.env.example" "$p/.env.example"
+    grep -qx 'DATABASE_URL=postgres://dev:dev@postgres:5432/dev' "$p/.env"
+    grep -qx 'FOO=bar' "$p/.env"
+    grep -qx '  - compose.postgres.yaml' "$p/compose.yaml"
+}
+
+rails_project_gets_no_database_url() {
+    "$NEW_PROJECT" rails railsdb --with postgres
+    local p="$PROJECTS_DIR/railsdb" f
+    for f in .env .env.example; do
+        fails grep -q '^DATABASE_URL=' "$p/$f"
+        grep -qx 'PGHOST=postgres' "$p/$f"
+    done
+}
+
+env_reaches_the_container() {
+    "$NEW_PROJECT" fastapi envc
+    docker compose -f "$PROJECTS_DIR/envc/compose.yaml" config --format json \
+        | python3 -c 'import json,sys; assert json.load(sys.stdin)["services"]["dev"]["environment"]["APP_PORT"] == "3000"'
+}
+
+ide_vscode_adds_extensions_and_opens() {
+    PATH="$WORK/bin:$PATH" "$NEW_PROJECT" fastapi idevs --ide=vscode
+    local p="$PROJECTS_DIR/idevs"
+    python3 -m json.tool "$p/.devcontainer/devcontainer.json" > /dev/null
+    grep -q '"ms-python.python"' "$p/.devcontainer/devcontainer.json"
+    grep -q '"charliermarsh.ruff"' "$p/.devcontainer/devcontainer.json"
+    grep -qx "$p ." "$CODE_LOG"
+}
+
+ide_vscode_without_code_gives_hint() {
+    # A PATH with the tools new-project needs, but no `code`.
+    local bin tool
+    bin="$(mktemp -d "$WORK/nocode.XXXX")"
+    for tool in bash env git docker sed grep find sort cp mkdir dirname basename cat tail head \
+                mktemp rm sha256sum cut paste readlink mv tr touch chmod printf; do
+        if command -v "$tool" > /dev/null; then ln -sf "$(command -v "$tool")" "$bin/$tool"; fi
+    done
+    PATH="$bin" "$NEW_PROJECT" node idenocode --ide=vscode > "$WORK/nocode.out" 2>&1
+    [[ -f "$PROJECTS_DIR/idenocode/compose.yaml" ]]
+    grep -q "code \." "$WORK/nocode.out"
+}
+
+unsupported_ide_fails() {
+    fails "$NEW_PROJECT" node ideemacs --ide=emacs > "$WORK/emacs.out" 2>&1
+    grep -q "vscode" "$WORK/emacs.out"
+    [[ ! -e "$PROJECTS_DIR/ideemacs" ]]
+}
+
+options_in_any_order() {
+    make_repo "$WORK/src/order" "Gemfile=x"
+    "$NEW_PROJECT" rails order --with redis --from "$WORK/src/order"
+    [[ "$(git -C "$PROJECTS_DIR/order" log --format=%s)" == "init" ]]
+    [[ -f "$PROJECTS_DIR/order/compose.redis.yaml" ]]
+}
+
+requirements_only_fastapi_repo() {
+    make_repo "$WORK/src/reqs" "requirements.txt=fastapi==0.142.2" "requirements-dev.txt=pytest==9.1.1" "main.py=#"
+    "$NEW_PROJECT" fastapi reqs --from "$WORK/src/reqs"
+    local p="$PROJECTS_DIR/reqs" out
+    out="$(just_dry_run "$p" install)"
+    [[ "$out" == *"uv pip install -r requirements.txt"* ]]
+    [[ "$out" == *"uv pip install -r requirements-dev.txt"* ]]
+    [[ "$(just_dry_run "$p" lint)" == *"uvx ruff@0.16.10 check ."* ]]
+    fails grep -q "uv sync" "$p/justfile"
+}
+
+pyproject_fastapi_repo_keeps_uv_sync() {
+    make_repo "$WORK/src/pyp" "pyproject.toml=[project]" "requirements.txt=x" "main.py=#"
+    "$NEW_PROJECT" fastapi pyp --from "$WORK/src/pyp"
+    [[ "$(just_dry_run "$PROJECTS_DIR/pyp" install)" == "uv sync" ]]
+}
+
+lock_is_written() {
+    PATH="$WORK/bin:$PATH" "$NEW_PROJECT" node locked --with redis --ide=vscode
+    local lock="$PROJECTS_DIR/locked/.devcontainer/template.lock"
+    grep -qx "template node" "$lock"
+    grep -qx "name locked" "$lock"
+    grep -qx "services redis" "$lock"
+    grep -qx "ide vscode" "$lock"
+    grep -qE "^file [0-9a-f]{64} compose.yaml$" "$lock"
+    fails grep -q " src/app.js$" "$lock"
+}
+
+# --- dev update -------------------------------------------------------------
+# Each scenario gets its own sandbox, so changing its templates does not leak.
+
+update_replaces_untouched_files() {
+    local sb="$WORK/sb-untouched"; make_sandbox "$sb"
+    "$sb/scripts/new-project" node upd1
+    local p="$PROJECTS_DIR/upd1"
+    echo "# template fix" >> "$sb/templates/node/scaffold/compose.yaml"
+    (cd "$p" && "$sb/scripts/dev.real" update) > "$WORK/upd1.out"
+    grep -qx "# template fix" "$p/compose.yaml"
+    grep -q "compose.yaml" "$WORK/upd1.out"
+    grep -q "$(sha256sum "$p/compose.yaml" | cut -d' ' -f1) compose.yaml" "$p/.devcontainer/template.lock"
+}
+
+update_never_overwrites_edits() {
+    local sb="$WORK/sb-edits"; make_sandbox "$sb"
+    "$sb/scripts/new-project" node upd2
+    local p="$PROJECTS_DIR/upd2"
+    echo "mine:" >> "$p/justfile"
+    cp "$p/justfile" "$WORK/upd2-justfile"
+    echo "# template fix" >> "$sb/templates/node/scaffold/justfile"
+    (cd "$p" && "$sb/scripts/dev.real" update) > "$WORK/upd2.out"
+    cmp "$WORK/upd2-justfile" "$p/justfile"
+    grep -qx "# template fix" "$p/justfile.template-new"
+    grep -qi "conflict" "$WORK/upd2.out"
+    grep -q "justfile" "$WORK/upd2.out"
+}
+
+update_skips_edited_file_when_template_unchanged() {
+    local sb="$WORK/sb-same"; make_sandbox "$sb"
+    "$sb/scripts/new-project" node upd3
+    local p="$PROJECTS_DIR/upd3"
+    echo "mine:" >> "$p/justfile"
+    (cd "$p" && "$sb/scripts/dev.real" update) > "$WORK/upd3.out"
+    [[ ! -e "$p/justfile.template-new" ]]
+    grep -qi "up to date" "$WORK/upd3.out"
+}
+
+update_keeps_adopted_settings() {
+    local sb="$WORK/sb-adopt"; make_sandbox "$sb"
+    make_repo "$WORK/src/upd4" "Gemfile=x" ".ruby-version=3.3.6"
+    "$sb/scripts/new-project" rails upd4 --from "$WORK/src/upd4"
+    local p="$PROJECTS_DIR/upd4"
+    sed -i 's|"shutdownAction": "none",|"shutdownAction": "none",\n  "updateContentCommand": "true",|' \
+        "$sb/templates/rails/scaffold/.devcontainer/devcontainer.json"
+    (cd "$p" && "$sb/scripts/dev.real" update) > /dev/null
+    grep -q '"updateContentCommand"' "$p/.devcontainer/devcontainer.json"
+    [[ "$(feature_version "$p" '"\.\/ruby"')" == "3.3.6" ]]
+}
+
+update_adds_new_files_and_respects_deletions() {
+    local sb="$WORK/sb-files"; make_sandbox "$sb"
+    "$sb/scripts/new-project" node upd5
+    local p="$PROJECTS_DIR/upd5"
+    rm "$p/.gitignore"
+    echo "new" > "$sb/templates/node/scaffold/.editorconfig"
+    echo "# template fix" >> "$sb/templates/node/scaffold/.gitignore"
+    (cd "$p" && "$sb/scripts/dev.real" update) > /dev/null
+    [[ -f "$p/.editorconfig" ]]
+    [[ ! -e "$p/.gitignore" ]]
+}
+
+update_keeps_services_and_ide() {
+    local sb="$WORK/sb-svc"; make_sandbox "$sb"
+    PATH="$WORK/bin:$PATH" "$sb/scripts/new-project" node upd6 --with postgres --ide=vscode
+    local p="$PROJECTS_DIR/upd6"
+    echo "# template fix" >> "$sb/templates/node/scaffold/compose.yaml"
+    sed -i 's|"name": "{{PROJECT_NAME}}",|"name": "{{PROJECT_NAME}}",\n  "updateContentCommand": "true",|' \
+        "$sb/templates/node/scaffold/.devcontainer/devcontainer.json"
+    (cd "$p" && "$sb/scripts/dev.real" update) > /dev/null
+    grep -qx '  - compose.postgres.yaml' "$p/compose.yaml"
+    grep -qx "# template fix" "$p/compose.yaml"
+    grep -q '"updateContentCommand"' "$p/.devcontainer/devcontainer.json"
+    grep -q '"biomejs.biome"' "$p/.devcontainer/devcontainer.json"
+    python3 -m json.tool "$p/.devcontainer/devcontainer.json" > /dev/null
+}
+
+update_without_lock_explains() {
+    "$NEW_PROJECT" node upd7
+    local p="$PROJECTS_DIR/upd7"
+    rm "$p/.devcontainer/template.lock"
+    cp "$p/compose.yaml" "$WORK/upd7-compose"
+    fails bash -c "cd '$p' && '$SANDBOX/scripts/dev.real' update" > "$WORK/upd7.out" 2>&1
+    grep -q "template.lock" "$WORK/upd7.out"
+    cmp "$WORK/upd7-compose" "$p/compose.yaml"
+}
+
+usage_rejects_incomplete_from() {
+    fails "$NEW_PROJECT" rails x --from > /dev/null 2>&1
+    fails "$NEW_PROJECT" rails x --bogus y > /dev/null 2>&1
+    [[ ! -e "$PROJECTS_DIR/x" ]]
+}
+
+scenario "Adopt a Rails repo" adopt_rails_repo
+scenario "Repo files are never overwritten" repo_files_never_overwritten
+scenario "Placeholders in repo code are untouched" placeholders_in_repo_code_untouched
+scenario "Java generator never clobbers an existing Maven build" java_init_never_clobbers_maven
+scenario "APP_PORT is honored with the repo's own .env.example" app_port_with_repo_env_example
+scenario "APP_PORT defaults to 3000 when the repo's example lacks it" app_port_defaults_when_repo_example_lacks_it
+scenario "No version file keeps the template pin" no_version_file_keeps_template_pin
+scenario "Node version from .nvmrc" node_version_from_nvmrc
+scenario "Node version from .node-version" node_version_from_node_version_file
+scenario "Java version from .sdkmanrc" java_version_from_sdkmanrc
+scenario "Repo's own devcontainer.json is kept and reported" repo_devcontainer_is_kept_and_reported
+scenario "Added files are listed and stay untracked" added_files_are_listed
+scenario "Existing target folder fails without cloning" existing_target_fails_without_cloning
+scenario "Clone failure leaves nothing behind" clone_failure_leaves_nothing
+scenario "Plain new-project unchanged" plain_new_project_unchanged
+scenario "Incomplete or unknown options are rejected" usage_rejects_incomplete_from
+scenario "Adopted repo gets no sample app or production stub" adopted_repo_gets_no_sample_app
+scenario "New project gets the starter app" new_fastapi_project_gets_starter
+scenario "Maven repo with wrapper uses ./mvnw" maven_repo_with_wrapper_uses_mvnw
+scenario "Maven repo without wrapper installs Maven" maven_repo_without_wrapper_installs_maven
+scenario "Spring Boot Maven repo gets a dev recipe" spring_boot_maven_repo_gets_dev_recipe
+scenario "Plain Maven repo: dev explains the main class" plain_maven_repo_dev_explains_main_class
+scenario "Maven repo with its own justfile keeps it" maven_repo_own_justfile_kept
+scenario "Gradle repo keeps the Gradle recipes" gradle_repo_keeps_gradle_recipes
+scenario "New project with postgres and redis" services_on_new_project
+scenario "Unknown service fails without creating anything" unknown_service_fails
+scenario "Adopted repo with --with keeps its .env.example" services_with_adopted_repo
+scenario "Rails project gets PGHOST but no DATABASE_URL" rails_project_gets_no_database_url
+scenario ".env variables reach the dev container" env_reaches_the_container
+scenario "--ide=vscode adds extensions and opens VS Code" ide_vscode_adds_extensions_and_opens
+scenario "--ide=vscode without code on PATH gives a hint" ide_vscode_without_code_gives_hint
+scenario "Unsupported IDE fails without creating anything" unsupported_ide_fails
+scenario "Options work in any order" options_in_any_order
+scenario "requirements.txt-only FastAPI repo gets pip recipes" requirements_only_fastapi_repo
+scenario "FastAPI repo with pyproject.toml keeps uv sync" pyproject_fastapi_repo_keeps_uv_sync
+scenario "Template lock is written" lock_is_written
+scenario "dev update replaces untouched files" update_replaces_untouched_files
+scenario "dev update never overwrites edits" update_never_overwrites_edits
+scenario "dev update skips edited file when template unchanged" update_skips_edited_file_when_template_unchanged
+scenario "dev update keeps adopted settings" update_keeps_adopted_settings
+scenario "dev update adds new files and respects deletions" update_adds_new_files_and_respects_deletions
+scenario "dev update keeps services and IDE settings" update_keeps_services_and_ide
+scenario "dev update without a lock explains and changes nothing" update_without_lock_explains
+
+echo
+echo "$PASSED passed, $FAILED failed"
+[[ "$FAILED" -eq 0 ]]

@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: shellcheck --severity=warning scripts/* images/*/validate templates/*/scaffold/.devcontainer/*/install.sh
+      - run: shellcheck --severity=warning scripts/* tests/* images/*/validate images/*/entrypoint templates/*/adopt templates/*/scaffold/.devcontainer/*/install.sh
 
   images:
     needs: shellcheck
@@ -45,6 +45,12 @@ jobs:
             if [[ "$PUSH" == "true" ]]; then docker push "$IMAGE"; fi
           done
 
+      - name: new-project behavior tests
+        run: tests/new-project
+
+      - name: dev behavior tests
+        run: tests/dev
+
       - name: Generate and start a project from every template
         env:
           PROJECTS_DIR: ${{ runner.temp }}/projects
@@ -53,5 +59,6 @@ jobs:
           for dir in templates/*/; do
             name="$(basename "$dir")"
             scripts/new-project "$name" "ci-$name"
-            (cd "$PROJECTS_DIR/ci-$name" && "$GITHUB_WORKSPACE/scripts/dev" exec just --list)
+            # Stop it before the next template: they all publish port 3000.
+            (cd "$PROJECTS_DIR/ci-$name" && "$GITHUB_WORKSPACE/scripts/dev" exec just --list && "$GITHUB_WORKSPACE/scripts/dev" down)
           done

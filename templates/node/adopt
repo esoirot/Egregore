@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Called by `new-project --from` as: adopt <project-dir>.
+# Matches the Node feature version to the repository's .nvmrc or .node-version.
+set -euo pipefail
+
+cd "$1"
+for FILE in .nvmrc .node-version; do
+    [[ -f "$FILE" ]] || continue
+
+    VERSION="$(tr -d '[:space:]' < "$FILE")"
+    VERSION="${VERSION#v}"
+    [[ "$VERSION" == lts/* ]] && VERSION="lts"
+
+    sed -i "/features\/node/,/}/ s|\"version\": \"[^\"]*\"|\"version\": \"$VERSION\"|" .devcontainer/devcontainer.json
+    echo "Node $VERSION (from $FILE)"
+    exit 0
+done

@@ -12,6 +12,7 @@ usage() {
     echo "  shell         open a bash shell in the dev container"
     echo "  exec <cmd>    run a command in the dev container"
     echo "  down          stop and remove the project's containers"
+    echo "  update        bring template fixes into this project (then dev down && dev up)"
     exit 1
 }
 
@@ -26,16 +27,29 @@ devcontainer() {
     [[ -t 0 && -t 1 ]] && tty=(-t)
 
     # Same path inside and outside: the CLI passes it to the host Docker daemon.
+    # Run as the host user (plus the socket's group): the CLI remaps the container's
+    # dev user to its own uid, so as root it would leave dev unable to write /workspace
+    # whenever the host uid is not 1000.
     docker run --rm -i "${tty[@]}" \
+        --user "$(id -u):$(id -g)" --group-add "$(stat -c %g /var/run/docker.sock)" -e HOME=/tmp \
         -v /var/run/docker.sock:/var/run/docker.sock \
         -v "$PWD:$PWD" -w "$PWD" \
         "$IMAGE" "$1" --workspace-folder "$PWD" "${@:2}"
 }
 
 case "${1:-}" in
-    up)    devcontainer up ;;
+    up)
+        # A failed start can leave a half-created container that a retry would
+        # start without its port; remove it so the next dev up starts fresh.
+        if ! devcontainer up; then
+            docker compose down >/dev/null 2>&1 || true
+            echo "dev up failed; cleaned up. If the port was in use, change APP_PORT in .env and rerun dev up." >&2
+            exit 1
+        fi
+        ;;
     shell) devcontainer exec bash ;;
     exec)  shift; [[ $# -gt 0 ]] || usage; devcontainer exec "$@" ;;
     down)  docker compose down ;;
+    update) exec "$REPO_ROOT/scripts/new-project" --update ;;
     *)     usage ;;
 esac

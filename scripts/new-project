@@ -3,22 +3,229 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 TEMPLATES_DIR="$REPO_ROOT/templates"
+SERVICES_DIR="$REPO_ROOT/services"
 PROJECTS_DIR="${PROJECTS_DIR:-$HOME/projects}"
-
-TEMPLATE="${1:-}"
-PROJECT_NAME="${2:-}"
+LOCK=.devcontainer/template.lock
+IDES="vscode"
 
 usage() {
-    echo "Usage: new-project <template> <project-name>"
+    echo "Usage: new-project <template> <project-name> [--from <git-url|path>] [--with <services>] [--ide=<ide>]"
+    echo "       new-project --update    (run in a project root; same as dev update)"
+    echo
+    echo "  --from    clone an existing repository and add the template's dev environment"
+    echo "            around it; files from the repository are never overwritten"
+    echo "  --with    comma-separated services: $(names "$SERVICES_DIR" compose.yaml | paste -sd, -)"
+    echo "  --ide     IDE integration: $IDES"
     echo
     echo "Available templates:"
-    for dir in "$TEMPLATES_DIR"/*/; do
-        [[ -d "$dir/scaffold" ]] && echo "  $(basename "$dir")"
-    done
+    names "$TEMPLATES_DIR" scaffold | sed 's/^/  /'
     echo
     echo "Project names allow lowercase letters, numbers, underscores and hyphens."
     exit 1
 }
+
+# names <dir> <marker>: subdirectories of dir that contain marker.
+names() {
+    local dir
+    for dir in "$1"/*/; do
+        if [[ -e "$dir/$2" ]]; then basename "$dir"; fi
+    done
+}
+
+# render <template> <name> <services> <ide> <with-starter> <out>: write the template's
+# files into out, fully rendered (placeholders, services, IDE settings).
+render() {
+    local template="$1" name="$2" services="$3" ide="$4" starter="$5" out="$6" svc json exts
+    local dir="$TEMPLATES_DIR/$template"
+
+    cp -R "$dir/scaffold/." "$out/"
+    if [[ "$starter" == yes && -d "$dir/starter" ]]; then
+        cp -R "$dir/starter/." "$out/"
+    fi
+    find "$out" -type f -exec sed -i -e "s|{{PROJECT_NAME}}|$name|g" -e "s|{{IMAGE}}|$IMAGE|g" {} +
+
+    if [[ -n "$services" ]]; then
+        {
+            echo "include:"
+            for svc in ${services//,/ }; do echo "  - compose.$svc.yaml"; done
+            echo
+            cat "$out/compose.yaml"
+        } > "$out/compose.yaml.new"
+        mv "$out/compose.yaml.new" "$out/compose.yaml"
+        for svc in ${services//,/ }; do
+            cp "$SERVICES_DIR/$svc/compose.yaml" "$out/compose.$svc.yaml"
+            if [[ -f "$out/.env.example" ]]; then
+                printf '\n# %s (new-project --with)\n' "$svc" >> "$out/.env.example"
+                service_env "$template" "$svc" >> "$out/.env.example"
+            fi
+        done
+    fi
+
+    if [[ "$ide" == vscode ]]; then
+        json="$out/.devcontainer/devcontainer.json"
+        exts="$(sed 's/.*/"&"/' "$dir/vscode-extensions" | paste -sd, - | sed 's/,/, /g')"
+        # Replace the closing brace with a customizations block.
+        sed -i '$d' "$json"
+        sed -i '$ s/$/,/' "$json"
+        printf '  "customizations": {\n    "vscode": {\n      "extensions": [%s]\n    }\n  }\n}\n' "$exts" >> "$json"
+    fi
+}
+
+# service_env <template> <service>: the service's variables, minus those the template skips.
+service_env() {
+    local keys=""
+    if [[ -f "$TEMPLATES_DIR/$1/env-skip" ]]; then
+        keys="$(grep -v '^#' "$TEMPLATES_DIR/$1/env-skip" | paste -sd'|' -)"
+    fi
+    if [[ -n "$keys" ]]; then
+        grep -v -E "^($keys)=" "$SERVICES_DIR/$2/env" || true
+    else
+        cat "$SERVICES_DIR/$2/env"
+    fi
+}
+
+# starter_files <template>: paths that come from starter/ (not tracked by the lock).
+starter_files() {
+    if [[ -d "$TEMPLATES_DIR/$1/starter" ]]; then
+        (cd "$TEMPLATES_DIR/$1/starter" && find . -type f | sed 's|^\./||')
+    fi
+}
+
+hash_of() {
+    sha256sum "$1" | cut -d' ' -f1
+}
+
+# run_adopt <template>: match the dev environment to the repository (versions, build tool).
+run_adopt() {
+    if [[ -x "$TEMPLATES_DIR/$1/adopt" ]]; then
+        "$TEMPLATES_DIR/$1/adopt" "$PWD"
+    fi
+}
+
+# write_lock <template> <name> <services> <ide> <file>...: record what was installed.
+write_lock() {
+    local template="$1" name="$2" services="$3" ide="$4" file
+    shift 4
+    {
+        echo "# Written by new-project, read by dev update. Do not edit."
+        echo "template $template"
+        echo "name $name"
+        echo "services $services"
+        echo "ide $ide"
+        for file in "$@"; do
+            if [[ -f "$file" ]]; then echo "file $(hash_of "$file") $file"; fi
+        done
+    } > "$LOCK"
+}
+
+update_project() {
+    [[ -f "$LOCK" ]] || {
+        echo "Error: no $LOCK in $PWD."
+        echo "dev update needs it; projects created before it existed must be updated by hand."
+        exit 1
+    }
+
+    local template="" name="" services="" ide="" kind a b
+    declare -A LOCKED=()
+    while read -r kind a b; do
+        case "$kind" in
+            template) template="$a" ;;
+            name)     name="$a" ;;
+            services) services="$a" ;;
+            ide)      ide="$a" ;;
+            file)     LOCKED["$b"]="$a" ;;
+        esac
+    done < "$LOCK"
+    [[ -d "$TEMPLATES_DIR/$template/scaffold" ]] || { echo "Error: unknown template in $LOCK: $template"; exit 1; }
+
+    local render_dir file new cur locked
+    render_dir="$(mktemp -d)"
+    render "$template" "$name" "$services" "$ide" no "$render_dir"
+
+    declare -A BEFORE=()
+    local -a written=() conflicts=() tracked=()
+    while IFS= read -r -d '' file; do
+        file="${file#./}"
+        new="$(hash_of "$render_dir/$file")"
+        locked="${LOCKED[$file]:-}"
+        if [[ -e "$file" ]]; then
+            [[ -n "$locked" ]] || continue              # the repository's own file
+            tracked+=("$file")
+            [[ "$new" != "$locked" ]] || continue       # template unchanged for this file
+            cur="$(hash_of "$file")"
+            if [[ "$cur" == "$locked" ]]; then
+                BEFORE["$file"]="$cur"
+                cp -p "$render_dir/$file" "$file"
+                written+=("$file")
+            else
+                cp -p "$render_dir/$file" "$file.template-new"
+                conflicts+=("$file")
+            fi
+        elif [[ -z "$locked" ]]; then                   # new in the template
+            mkdir -p "$(dirname "$file")"
+            cp -p "$render_dir/$file" "$file"
+            BEFORE["$file"]=""
+            written+=("$file")
+            tracked+=("$file")
+        fi                                              # else: deleted by you, stays deleted
+    done < <(cd "$render_dir" && find . -type f -print0 | sort -z)
+    rm -rf "$render_dir"
+
+    if [[ ${#written[@]} -gt 0 ]]; then
+        run_adopt "$template" > /dev/null
+    fi
+
+    # Lock: current hash for files in sync with the template, offered version for conflicts.
+    write_lock "$template" "$name" "$services" "$ide" "${tracked[@]}"
+    for file in "${conflicts[@]}"; do
+        sed -i "s|^file [0-9a-f]* $file\$|file $(hash_of "$file.template-new") $file|" "$LOCK"
+    done
+
+    local changed=0
+    for file in "${written[@]}"; do
+        if [[ "$(hash_of "$file")" != "${BEFORE[$file]}" ]]; then
+            if [[ $changed -eq 0 ]]; then echo "Updated from the $template template:"; fi
+            echo "  $file"
+            changed=1
+        fi
+    done
+    if [[ ${#conflicts[@]} -gt 0 ]]; then
+        echo "Conflicts (you edited these; the template's new version is next to them as <file>.template-new):"
+        printf '  %s\n' "${conflicts[@]}"
+        changed=1
+    fi
+    if [[ $changed -eq 0 ]]; then
+        echo "Already up to date with the $template template."
+    else
+        echo
+        echo "Apply with: dev down && dev up"
+    fi
+}
+
+if [[ "${1:-}" == "--update" ]]; then
+    [[ $# -eq 1 ]] || usage
+    IMAGE=""
+    source "$REPO_ROOT/images/base/image.env"
+    update_project
+    exit 0
+fi
+
+TEMPLATE="${1:-}"
+PROJECT_NAME="${2:-}"
+FROM_REPO=""
+SERVICES=""
+IDE=""
+
+[[ $# -ge 2 ]] || usage
+shift 2
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --from)  [[ -n "${2:-}" ]] || usage; FROM_REPO="$2"; shift 2 ;;
+        --with)  [[ -n "${2:-}" ]] || usage; SERVICES="$2"; shift 2 ;;
+        --ide=*) IDE="${1#--ide=}"; shift ;;
+        *)       usage ;;
+    esac
+done
 
 if [[ ! "$TEMPLATE" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
     usage
@@ -35,6 +242,18 @@ fi
 # Lowercase only: the name is also the compose project name.
 if [[ ! "$PROJECT_NAME" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
     usage
+fi
+
+for SVC in ${SERVICES//,/ }; do
+    if [[ ! "$SVC" =~ ^[a-z0-9-]+$ || ! -f "$SERVICES_DIR/$SVC/compose.yaml" ]]; then
+        echo "Error: unknown service: $SVC (available: $(names "$SERVICES_DIR" compose.yaml | paste -sd, -))"
+        exit 1
+    fi
+done
+
+if [[ -n "$IDE" && " $IDES " != *" $IDE "* ]]; then
+    echo "Error: unsupported IDE: $IDE (supported: $IDES)"
+    exit 1
 fi
 
 # Provides IMAGE (the shared base image).
@@ -54,24 +273,73 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     exit 1
 fi
 
-mkdir -p "$PROJECT_ROOT"
-cp -R "$TEMPLATE_DIR/scaffold/." "$PROJECT_ROOT/"
-
-find "$PROJECT_ROOT" -type f -exec sed -i \
-    -e "s|{{PROJECT_NAME}}|$PROJECT_NAME|g" \
-    -e "s|{{IMAGE}}|$IMAGE|g" \
-    {} +
-
-echo "Created $TEMPLATE project: $PROJECT_ROOT"
+if [[ -n "$FROM_REPO" ]]; then
+    git clone "$FROM_REPO" "$PROJECT_ROOT"
+else
+    mkdir -p "$PROJECT_ROOT"
+fi
 
 cd "$PROJECT_ROOT"
 
+# starter/ (sample app, production stub, README) only goes into new projects,
+# never into an adopted repository.
+WITH_STARTER=yes
+if [[ -n "$FROM_REPO" ]]; then WITH_STARTER=no; fi
+
+RENDER_DIR="$(mktemp -d)"
+trap 'rm -rf "$RENDER_DIR"' EXIT
+render "$TEMPLATE" "$PROJECT_NAME" "$SERVICES" "$IDE" "$WITH_STARTER" "$RENDER_DIR"
+
+# Copy rendered files the project does not have yet; existing files always win.
+ADDED=()
+while IFS= read -r -d '' FILE; do
+    FILE="${FILE#./}"
+    [[ -e "$FILE" ]] && continue
+    mkdir -p "$(dirname "$FILE")"
+    cp -p "$RENDER_DIR/$FILE" "$FILE"
+    ADDED+=("$FILE")
+done < <(cd "$RENDER_DIR" && find . -type f -print0 | sort -z)
+
+if [[ " ${ADDED[*]} " == *" .devcontainer/devcontainer.json "* ]]; then
+    run_adopt "$TEMPLATE"
+else
+    echo "Note: kept the repository's .devcontainer/devcontainer.json; it may not follow the $TEMPLATE template."
+fi
+
+# The lock tracks the dev environment only, not starter files (they are yours).
+TRACKED=()
+STARTER=" $(starter_files "$TEMPLATE" | tr '\n' ' ') "
+for FILE in "${ADDED[@]}"; do
+    if [[ "$STARTER" != *" $FILE "* ]]; then TRACKED+=("$FILE"); fi
+done
+write_lock "$TEMPLATE" "$PROJECT_NAME" "$SERVICES" "$IDE" "${TRACKED[@]}"
+
+echo "Created $TEMPLATE project: $PROJECT_ROOT"
+
 # Seed .env so the host port is set before the first dev up (APP_PORT=<port> new-project ...).
-if [[ -f .env.example ]]; then
+if [[ ! -f .env && -f .env.example ]]; then
     cp .env.example .env
+fi
+touch .env
+if grep -q '^APP_PORT=' .env; then
     if [[ -n "${APP_PORT:-}" ]]; then
         sed -i "s|^APP_PORT=.*|APP_PORT=$APP_PORT|" .env
     fi
+else
+    [[ -z "$(tail -c 1 .env)" ]] || echo >> .env
+    echo "APP_PORT=${APP_PORT:-3000}" >> .env
+fi
+# Service variables the .env does not have yet (an adopted repo's own .env.example lacks them).
+for SVC in ${SERVICES//,/ }; do
+    while IFS= read -r LINE; do
+        grep -q "^${LINE%%=*}=" .env || echo "$LINE" >> .env
+    done < <(service_env "$TEMPLATE" "$SVC")
+done
+
+if [[ -n "$FROM_REPO" ]]; then
+    echo
+    echo "Added from the $TEMPLATE template (untracked in the repository; commit them or not):"
+    printf '  %s\n' "${ADDED[@]}"
 fi
 
 "$REPO_ROOT/scripts/dev" up
@@ -81,3 +349,13 @@ echo "Development container started."
 echo "Next:"
 echo "  cd \"$PROJECT_ROOT\""
 echo "  dev shell"
+
+if [[ "$IDE" == vscode ]]; then
+    if command -v code > /dev/null; then
+        code .
+    else
+        echo
+        echo "VS Code CLI (code) not found. Open the project from WSL with: cd \"$PROJECT_ROOT\" && code ."
+        echo "Then run \"Dev Containers: Reopen in Container\"."
+    fi
+fi

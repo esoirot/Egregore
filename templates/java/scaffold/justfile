@@ -7,11 +7,11 @@ set dotenv-load
 default:
     @just --list
 
-# Create the Gradle project if missing (run by dev up)
+# Create the Gradle project if there is no Gradle or Maven build yet (run by dev up)
 init:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [[ ! -f settings.gradle.kts ]]; then
+    if [[ ! -e settings.gradle.kts && ! -e settings.gradle && ! -e build.gradle.kts && ! -e build.gradle && ! -e pom.xml ]]; then
         gradle init --type java-application --dsl kotlin --test-framework junit-jupiter \
             --project-name {{PROJECT_NAME}} --java-version 27 --no-split-project \
             --no-incubating --overwrite

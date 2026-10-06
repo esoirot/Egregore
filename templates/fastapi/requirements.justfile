@@ -1,5 +1,5 @@
 # Team command contract: every project exposes install, dev, test, lint, build.
-# Run inside the container (dev shell).
+# Run inside the container (dev shell). requirements.txt project, written by templates/fastapi/adopt.
 
 set dotenv-load
 
@@ -7,10 +7,11 @@ set dotenv-load
 default:
     @just --list
 
-# Install dependencies (run by dev up)
+# Install dependencies into .venv (run by dev up)
 install:
-    uv sync
-
+    uv venv --allow-existing
+    uv pip install -r requirements.txt
+@DEV_REQUIREMENTS@
 # Start the app on port 3000 with reload (reachable on the host at APP_PORT).
 # FastAPI finds the app in main.py, app.py, api.py or app/{main,app,api}.py.
 dev:
@@ -20,12 +21,11 @@ dev:
 test *args:
     uv run pytest {{args}}
 
-# Lint and check formatting
+# Lint and check formatting (ruff runs from uvx, it does not need to be a dependency)
 lint:
-    uv run ruff check .
-    uv run ruff format --check .
+    uvx ruff@0.16.10 check .
+    uvx ruff@0.16.10 format --check .
 
-# Verify the lockfile and byte-compile the project
+# Byte-compile the project
 build:
-    uv lock --check
     uv run python -m compileall -q -x '\.venv' .

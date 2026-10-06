@@ -7,5 +7,10 @@ curl -LsSf "https://astral.sh/uv/$VERSION/install.sh" | env UV_INSTALL_DIR=/usr/
 # In the image layer, so it is not downloaded again on every container rebuild.
 UV_PYTHON_INSTALL_DIR=/opt/uv-python uv python install "$PYTHON"
 
-# Owned by the dev user so uv can add other Python versions without sudo.
-chown -R "$_REMOTE_USER:$_REMOTE_USER" /opt/uv-python
+# Writable through a group, not chowned to dev: the CLI remaps dev to the host uid
+# after this build (only dev's home follows; supplementary groups stay).
+getent group devtools > /dev/null || groupadd --system devtools
+usermod -aG devtools "$_REMOTE_USER"
+chgrp -R devtools /opt/uv-python
+chmod -R g+rwX /opt/uv-python
+find /opt/uv-python -type d -exec chmod g+s {} +

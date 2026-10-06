@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Called by `new-project --from` as: adopt <project-dir>.
+# For a requirements.txt project without pyproject.toml (uv sync needs one),
+# switches the copied justfile to pip-style recipes.
+set -euo pipefail
+
+TEMPLATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$1"
+
+# Only replace the justfile this template copied (a repository's own justfile wins).
+if [[ -f requirements.txt && ! -f pyproject.toml ]] && grep -q '^# Team command contract' justfile && grep -q 'uv sync' justfile; then
+    DEV_REQUIREMENTS=""
+    if [[ -f requirements-dev.txt ]]; then
+        DEV_REQUIREMENTS="    uv pip install -r requirements-dev.txt"
+    fi
+    RECIPES="$(cat "$TEMPLATE_DIR/requirements.justfile")"
+    RECIPES="${RECIPES//@DEV_REQUIREMENTS@/"$DEV_REQUIREMENTS"}"
+    printf '%s\n' "$RECIPES" > justfile
+    echo "requirements.txt project: justfile uses uv pip"
+fi
