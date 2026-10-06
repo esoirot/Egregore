@@ -77,32 +77,11 @@
   ],
   "packageRules": [
     {
-      "description": "One PR per runtime, across all the files that pin it (they must stay equal)",
-      "matchPackageNames": [
-        "node",
-        "pnpm",
-        "python",
-        "uv",
-        "ruby",
-        "java",
-        "gradle",
-        "ruff",
-        "@devcontainers/cli"
+      "description": "One PR per template: a template's pins (runtime, its images, tools) must stay in step, and CI tests the template as a whole. A new template gets its own group with no change here. Elsewhere, Renovate's default already puts every file pinning the same dependency in one PR.",
+      "matchFileNames": [
+        "templates/**"
       ],
-      "groupName": "{{packageName}}"
-    },
-    {
-      "description": "Docker images of the same runtime join their runtime group",
-      "matchDatasources": [
-        "docker"
-      ],
-      "matchPackageNames": [
-        "node",
-        "python",
-        "ghcr.io/astral-sh/uv",
-        "amazoncorretto"
-      ],
-      "groupName": "{{#if (equals packageName 'ghcr.io/astral-sh/uv')}}uv{{else}}{{#if (equals packageName 'amazoncorretto')}}java{{else}}{{packageName}}{{/if}}{{/if}}"
+      "groupName": "{{lookup (split packageFile '/') 1}} template"
     },
     {
       "description": "Template placeholders are not images",

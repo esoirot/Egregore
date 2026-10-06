@@ -450,7 +450,7 @@ What it tracks:
 
 Template pins outside built-in managers carry a `# renovate: datasource=… depName=…` comment (`//` in JSON files) read by one generic manager (see "Adding a New Template").
 
-Pins that must stay equal go in one PR (one group per runtime: `node`, `python`, `java`, `ruby`, `uv`, `pnpm`, …). Not tracked, on purpose: the `dev-base` image tag (bump it by hand when the base image changes), the Java major in the java `justfile` (`--java-version`), and apt packages (they follow the pinned base image).
+Pins that must stay equal go in one PR: all of a template's pins (runtime, starter images, tools) share one PR named `<template> template` (major updates in a separate `major-` one), so CI tests the template as a whole and a new template gets its group with no config change. Outside `templates/`, every file pinning the same dependency shares a PR (Renovate's default). Not tracked, on purpose: the `dev-base` image tag (bump it by hand when the base image changes), the Java major in the java `justfile` (`--java-version`), and apt packages (they follow the pinned base image).
 
 To bump a pin by hand, edit the `FROM` line or version in the relevant file, and bump `IMAGE` in `image.env` when an image changes; `CLAUDE.md` lists where each version lives.
 
