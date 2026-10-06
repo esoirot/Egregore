@@ -1,0 +1,23 @@
+# shellcheck shell=bash
+# Scenarios for the fastapi template: adopt (requirements.txt-only repos).
+# Sourced by tests/new-project, which provides the helpers and variables.
+
+requirements_only_fastapi_repo() {
+    make_repo "$WORK/src/reqs" "requirements.txt=fastapi==0.142.2" "requirements-dev.txt=pytest==9.1.1" "main.py=#"
+    "$NEW_PROJECT" fastapi reqs --from "$WORK/src/reqs"
+    local p="$PROJECTS_DIR/reqs" out
+    out="$(just_dry_run "$p" install)"
+    [[ "$out" == *"uv pip install -r requirements.txt"* ]]
+    [[ "$out" == *"uv pip install -r requirements-dev.txt"* ]]
+    [[ "$(just_dry_run "$p" lint)" == *"uvx ruff@0.16.10 check ."* ]]
+    fails grep -q "uv sync" "$p/justfile"
+}
+
+pyproject_fastapi_repo_keeps_uv_sync() {
+    make_repo "$WORK/src/pyp" "pyproject.toml=[project]" "requirements.txt=x" "main.py=#"
+    "$NEW_PROJECT" fastapi pyp --from "$WORK/src/pyp"
+    [[ "$(just_dry_run "$PROJECTS_DIR/pyp" install)" == "uv sync" ]]
+}
+
+scenario "requirements.txt-only FastAPI repo gets pip recipes" requirements_only_fastapi_repo
+scenario "FastAPI repo with pyproject.toml keeps uv sync" pyproject_fastapi_repo_keeps_uv_sync

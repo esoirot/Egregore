@@ -1,0 +1,73 @@
+# shellcheck shell=bash
+# Scenarios for the java template: adopt (.sdkmanrc, Maven recipes) and the init guard.
+# Sourced by tests/new-project, which provides the helpers and variables.
+
+java_init_never_clobbers_maven() {
+    make_repo "$WORK/src/mvn" "pom.xml=<project/>"
+    "$NEW_PROJECT" java mvn --from "$WORK/src/mvn"
+    local p="$PROJECTS_DIR/mvn"
+    # The base image has no gradle: if the guard let `gradle init` run, this fails.
+    docker run --rm -v "$p:/workspace" "$BASE_IMAGE" just init
+    [[ "$(cat "$p/pom.xml")" == "<project/>" ]]
+    [[ ! -e "$p/settings.gradle.kts" ]]
+}
+
+java_version_from_sdkmanrc() {
+    make_repo "$WORK/src/sdk" ".sdkmanrc=java=21.0.5-tem" "pom.xml=<project/>"
+    "$NEW_PROJECT" java sdk --from "$WORK/src/sdk"
+    local json="$PROJECTS_DIR/sdk/.devcontainer/devcontainer.json"
+    grep -q '"version": "21.0.5-tem"' "$json"
+    grep -q '"jdkDistro": "tem"' "$json"
+}
+
+maven_repo_with_wrapper_uses_mvnw() {
+    make_repo "$WORK/src/mvnw" "pom.xml=<project/>" "mvnw=#!/bin/sh"
+    "$NEW_PROJECT" java mvnw --from "$WORK/src/mvnw"
+    local p="$PROJECTS_DIR/mvnw"
+    [[ "$(just_dry_run "$p" test)" == "./mvnw test" ]]
+    [[ "$(just_dry_run "$p" build)" == "./mvnw package" ]]
+    fails grep -q '"installMaven"' "$p/.devcontainer/devcontainer.json"
+}
+
+maven_repo_without_wrapper_installs_maven() {
+    make_repo "$WORK/src/mvn2" "pom.xml=<project/>"
+    "$NEW_PROJECT" java mvn2 --from "$WORK/src/mvn2"
+    local p="$PROJECTS_DIR/mvn2"
+    [[ "$(just_dry_run "$p" test)" == "mvn test" ]]
+    grep -q '"installMaven": true' "$p/.devcontainer/devcontainer.json"
+}
+
+spring_boot_maven_repo_gets_dev_recipe() {
+    make_repo "$WORK/src/boot" "pom.xml=<plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin>" "mvnw=#!/bin/sh"
+    "$NEW_PROJECT" java boot --from "$WORK/src/boot"
+    [[ "$(just_dry_run "$PROJECTS_DIR/boot" dev)" == "./mvnw spring-boot:run" ]]
+}
+
+plain_maven_repo_dev_explains_main_class() {
+    make_repo "$WORK/src/plainmvn" "pom.xml=<project/>" "mvnw=#!/bin/sh"
+    "$NEW_PROJECT" java plainmvn --from "$WORK/src/plainmvn"
+    local out
+    out="$(docker run --rm -v "$PROJECTS_DIR/plainmvn:/workspace" "$BASE_IMAGE" just dev 2>&1)" && return 1
+    [[ "$out" == *"main class"* ]]
+}
+
+maven_repo_own_justfile_kept() {
+    make_repo "$WORK/src/mvnjf" "pom.xml=<project/>" "justfile=mine:"
+    "$NEW_PROJECT" java mvnjf --from "$WORK/src/mvnjf"
+    cmp "$WORK/src/mvnjf/justfile" "$PROJECTS_DIR/mvnjf/justfile"
+}
+
+gradle_repo_keeps_gradle_recipes() {
+    make_repo "$WORK/src/grd" "settings.gradle.kts=rootProject.name = \"grd\""
+    "$NEW_PROJECT" java grd --from "$WORK/src/grd"
+    [[ "$(just_dry_run "$PROJECTS_DIR/grd" test)" == "./gradlew test" ]]
+}
+
+scenario "Java generator never clobbers an existing Maven build" java_init_never_clobbers_maven
+scenario "Java version from .sdkmanrc" java_version_from_sdkmanrc
+scenario "Maven repo with wrapper uses ./mvnw" maven_repo_with_wrapper_uses_mvnw
+scenario "Maven repo without wrapper installs Maven" maven_repo_without_wrapper_installs_maven
+scenario "Spring Boot Maven repo gets a dev recipe" spring_boot_maven_repo_gets_dev_recipe
+scenario "Plain Maven repo: dev explains the main class" plain_maven_repo_dev_explains_main_class
+scenario "Maven repo with its own justfile keeps it" maven_repo_own_justfile_kept
+scenario "Gradle repo keeps the Gradle recipes" gradle_repo_keeps_gradle_recipes

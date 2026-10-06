@@ -92,17 +92,6 @@ scenario() {
     fi
 }
 
-adopt_rails_repo() {
-    make_repo "$WORK/src/rails-app" "Gemfile=source 'https://rubygems.org'" ".ruby-version=3.3.6"
-    "$NEW_PROJECT" rails rails-app --from "$WORK/src/rails-app"
-    local p="$PROJECTS_DIR/rails-app"
-    [[ "$(git -C "$p" log --format=%s)" == "init" ]]
-    [[ -f "$p/.devcontainer/devcontainer.json" && -f "$p/compose.yaml" && -f "$p/justfile" ]]
-    [[ -x "$p/.devcontainer/ruby/install.sh" ]]
-    [[ "$(feature_version "$p" '"\.\/ruby"')" == "3.3.6" ]]
-    grep -qx "$p up" "$DEV_LOG"
-}
-
 repo_files_never_overwritten() {
     make_repo "$WORK/src/keep" "README.md=# Mine" ".gitignore=my-ignore" "justfile=mine:" "Gemfile=x"
     "$NEW_PROJECT" rails keep --from "$WORK/src/keep"
@@ -121,16 +110,6 @@ placeholders_in_repo_code_untouched() {
     grep -q "image: $BASE_IMAGE" "$p/compose.yaml"
 }
 
-java_init_never_clobbers_maven() {
-    make_repo "$WORK/src/mvn" "pom.xml=<project/>"
-    "$NEW_PROJECT" java mvn --from "$WORK/src/mvn"
-    local p="$PROJECTS_DIR/mvn"
-    # The base image has no gradle: if the guard let `gradle init` run, this fails.
-    docker run --rm -v "$p:/workspace" "$BASE_IMAGE" just init
-    [[ "$(cat "$p/pom.xml")" == "<project/>" ]]
-    [[ ! -e "$p/settings.gradle.kts" ]]
-}
-
 app_port_with_repo_env_example() {
     make_repo "$WORK/src/envx" ".env.example=FOO=bar" "Gemfile=x"
     APP_PORT=3100 "$NEW_PROJECT" rails envx --from "$WORK/src/envx"
@@ -142,33 +121,6 @@ app_port_defaults_when_repo_example_lacks_it() {
     make_repo "$WORK/src/envd" ".env.example=FOO=bar" "Gemfile=x"
     "$NEW_PROJECT" rails envd --from "$WORK/src/envd"
     grep -qx "APP_PORT=3000" "$PROJECTS_DIR/envd/.env"
-}
-
-no_version_file_keeps_template_pin() {
-    make_repo "$WORK/src/nover" "Gemfile=x"
-    "$NEW_PROJECT" rails nover --from "$WORK/src/nover"
-    [[ "$(feature_version "$PROJECTS_DIR/nover" '"\.\/ruby"')" == \
-       "$(feature_version "$SANDBOX/templates/rails/scaffold" '"\.\/ruby"')" ]]
-}
-
-node_version_from_nvmrc() {
-    make_repo "$WORK/src/nvm" ".nvmrc=v24.11.0" "package.json={}"
-    "$NEW_PROJECT" node nvm --from "$WORK/src/nvm"
-    [[ "$(feature_version "$PROJECTS_DIR/nvm" 'features\/node')" == "24.11.0" ]]
-}
-
-node_version_from_node_version_file() {
-    make_repo "$WORK/src/nodev" ".node-version=22" "package.json={}"
-    "$NEW_PROJECT" node nodev --from "$WORK/src/nodev"
-    [[ "$(feature_version "$PROJECTS_DIR/nodev" 'features\/node')" == "22" ]]
-}
-
-java_version_from_sdkmanrc() {
-    make_repo "$WORK/src/sdk" ".sdkmanrc=java=21.0.5-tem" "pom.xml=<project/>"
-    "$NEW_PROJECT" java sdk --from "$WORK/src/sdk"
-    local json="$PROJECTS_DIR/sdk/.devcontainer/devcontainer.json"
-    grep -q '"version": "21.0.5-tem"' "$json"
-    grep -q '"jdkDistro": "tem"' "$json"
 }
 
 repo_devcontainer_is_kept_and_reported() {
@@ -215,49 +167,6 @@ plain_new_project_unchanged() {
 # just prints it on stderr; `*args` recipes render with a trailing space.
 just_dry_run() {
     docker run --rm -v "$1:/workspace" "$BASE_IMAGE" just --dry-run "$2" 2>&1 | sed 's/[[:space:]]*$//'
-}
-
-maven_repo_with_wrapper_uses_mvnw() {
-    make_repo "$WORK/src/mvnw" "pom.xml=<project/>" "mvnw=#!/bin/sh"
-    "$NEW_PROJECT" java mvnw --from "$WORK/src/mvnw"
-    local p="$PROJECTS_DIR/mvnw"
-    [[ "$(just_dry_run "$p" test)" == "./mvnw test" ]]
-    [[ "$(just_dry_run "$p" build)" == "./mvnw package" ]]
-    fails grep -q '"installMaven"' "$p/.devcontainer/devcontainer.json"
-}
-
-maven_repo_without_wrapper_installs_maven() {
-    make_repo "$WORK/src/mvn2" "pom.xml=<project/>"
-    "$NEW_PROJECT" java mvn2 --from "$WORK/src/mvn2"
-    local p="$PROJECTS_DIR/mvn2"
-    [[ "$(just_dry_run "$p" test)" == "mvn test" ]]
-    grep -q '"installMaven": true' "$p/.devcontainer/devcontainer.json"
-}
-
-spring_boot_maven_repo_gets_dev_recipe() {
-    make_repo "$WORK/src/boot" "pom.xml=<plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin>" "mvnw=#!/bin/sh"
-    "$NEW_PROJECT" java boot --from "$WORK/src/boot"
-    [[ "$(just_dry_run "$PROJECTS_DIR/boot" dev)" == "./mvnw spring-boot:run" ]]
-}
-
-plain_maven_repo_dev_explains_main_class() {
-    make_repo "$WORK/src/plainmvn" "pom.xml=<project/>" "mvnw=#!/bin/sh"
-    "$NEW_PROJECT" java plainmvn --from "$WORK/src/plainmvn"
-    local out
-    out="$(docker run --rm -v "$PROJECTS_DIR/plainmvn:/workspace" "$BASE_IMAGE" just dev 2>&1)" && return 1
-    [[ "$out" == *"main class"* ]]
-}
-
-maven_repo_own_justfile_kept() {
-    make_repo "$WORK/src/mvnjf" "pom.xml=<project/>" "justfile=mine:"
-    "$NEW_PROJECT" java mvnjf --from "$WORK/src/mvnjf"
-    cmp "$WORK/src/mvnjf/justfile" "$PROJECTS_DIR/mvnjf/justfile"
-}
-
-gradle_repo_keeps_gradle_recipes() {
-    make_repo "$WORK/src/grd" "settings.gradle.kts=rootProject.name = \"grd\""
-    "$NEW_PROJECT" java grd --from "$WORK/src/grd"
-    [[ "$(just_dry_run "$PROJECTS_DIR/grd" test)" == "./gradlew test" ]]
 }
 
 adopted_repo_gets_no_sample_app() {
@@ -313,15 +222,6 @@ services_with_adopted_repo() {
     grep -qx '  - compose.postgres.yaml' "$p/compose.yaml"
 }
 
-rails_project_gets_no_database_url() {
-    "$NEW_PROJECT" rails railsdb --with postgres
-    local p="$PROJECTS_DIR/railsdb" f
-    for f in .env .env.example; do
-        fails grep -q '^DATABASE_URL=' "$p/$f"
-        grep -qx 'PGHOST=postgres' "$p/$f"
-    done
-}
-
 env_reaches_the_container() {
     "$NEW_PROJECT" fastapi envc
     docker compose -f "$PROJECTS_DIR/envc/compose.yaml" config --format json \
@@ -371,23 +271,6 @@ options_in_any_order() {
     "$NEW_PROJECT" rails order --with redis --from "$WORK/src/order"
     [[ "$(git -C "$PROJECTS_DIR/order" log --format=%s)" == "init" ]]
     [[ -f "$PROJECTS_DIR/order/compose.redis.yaml" ]]
-}
-
-requirements_only_fastapi_repo() {
-    make_repo "$WORK/src/reqs" "requirements.txt=fastapi==0.142.2" "requirements-dev.txt=pytest==9.1.1" "main.py=#"
-    "$NEW_PROJECT" fastapi reqs --from "$WORK/src/reqs"
-    local p="$PROJECTS_DIR/reqs" out
-    out="$(just_dry_run "$p" install)"
-    [[ "$out" == *"uv pip install -r requirements.txt"* ]]
-    [[ "$out" == *"uv pip install -r requirements-dev.txt"* ]]
-    [[ "$(just_dry_run "$p" lint)" == *"uvx ruff@0.16.10 check ."* ]]
-    fails grep -q "uv sync" "$p/justfile"
-}
-
-pyproject_fastapi_repo_keeps_uv_sync() {
-    make_repo "$WORK/src/pyp" "pyproject.toml=[project]" "requirements.txt=x" "main.py=#"
-    "$NEW_PROJECT" fastapi pyp --from "$WORK/src/pyp"
-    [[ "$(just_dry_run "$PROJECTS_DIR/pyp" install)" == "uv sync" ]]
 }
 
 lock_is_written() {
@@ -589,16 +472,10 @@ usage_rejects_incomplete_from() {
     [[ ! -e "$PROJECTS_DIR/x" ]]
 }
 
-scenario "Adopt a Rails repo" adopt_rails_repo
 scenario "Repo files are never overwritten" repo_files_never_overwritten
 scenario "Placeholders in repo code are untouched" placeholders_in_repo_code_untouched
-scenario "Java generator never clobbers an existing Maven build" java_init_never_clobbers_maven
 scenario "APP_PORT is honored with the repo's own .env.example" app_port_with_repo_env_example
 scenario "APP_PORT defaults to 3000 when the repo's example lacks it" app_port_defaults_when_repo_example_lacks_it
-scenario "No version file keeps the template pin" no_version_file_keeps_template_pin
-scenario "Node version from .nvmrc" node_version_from_nvmrc
-scenario "Node version from .node-version" node_version_from_node_version_file
-scenario "Java version from .sdkmanrc" java_version_from_sdkmanrc
 scenario "Repo's own devcontainer.json is kept and reported" repo_devcontainer_is_kept_and_reported
 scenario "Added files are listed and stay untracked" added_files_are_listed
 scenario "Existing target folder fails without cloning" existing_target_fails_without_cloning
@@ -607,24 +484,15 @@ scenario "Plain new-project unchanged" plain_new_project_unchanged
 scenario "Incomplete or unknown options are rejected" usage_rejects_incomplete_from
 scenario "Adopted repo gets no sample app or production stub" adopted_repo_gets_no_sample_app
 scenario "New project gets the starter app" new_fastapi_project_gets_starter
-scenario "Maven repo with wrapper uses ./mvnw" maven_repo_with_wrapper_uses_mvnw
-scenario "Maven repo without wrapper installs Maven" maven_repo_without_wrapper_installs_maven
-scenario "Spring Boot Maven repo gets a dev recipe" spring_boot_maven_repo_gets_dev_recipe
-scenario "Plain Maven repo: dev explains the main class" plain_maven_repo_dev_explains_main_class
-scenario "Maven repo with its own justfile keeps it" maven_repo_own_justfile_kept
-scenario "Gradle repo keeps the Gradle recipes" gradle_repo_keeps_gradle_recipes
 scenario "New project with postgres and redis" services_on_new_project
 scenario "Unknown service fails without creating anything" unknown_service_fails
 scenario "Adopted repo with --with keeps its .env.example" services_with_adopted_repo
-scenario "Rails project gets PGHOST but no DATABASE_URL" rails_project_gets_no_database_url
 scenario ".env variables reach the dev container" env_reaches_the_container
 scenario "--ide=vscode adds extensions and opens VS Code" ide_vscode_adds_extensions_and_opens
 scenario "--ide=vscode without code on PATH gives a hint" ide_vscode_without_code_gives_hint
 scenario "Unsupported IDE fails without creating anything" unsupported_ide_fails
 scenario "Template render failure creates nothing" render_failure_creates_nothing
 scenario "Options work in any order" options_in_any_order
-scenario "requirements.txt-only FastAPI repo gets pip recipes" requirements_only_fastapi_repo
-scenario "FastAPI repo with pyproject.toml keeps uv sync" pyproject_fastapi_repo_keeps_uv_sync
 scenario "Template lock is written" lock_is_written
 for t in $(template_names); do
     scenario "Template $t keeps the contract" check_contract "$SANDBOX" "$t"
@@ -642,6 +510,12 @@ scenario "dev update keeps adopted settings" update_keeps_adopted_settings
 scenario "dev update adds new files and respects deletions" update_adds_new_files_and_respects_deletions
 scenario "dev update keeps services and IDE settings" update_keeps_services_and_ide
 scenario "dev update without a lock explains and changes nothing" update_without_lock_explains
+
+# Each template's own scenarios (adopt, env-skip), kept next to it in templates/<name>/test.
+for f in "$SANDBOX"/templates/*/test; do
+    # shellcheck source=/dev/null  # checked on its own in CI
+    if [[ -f "$f" ]]; then source "$f"; fi
+done
 
 echo
 echo "$PASSED passed, $FAILED failed"

@@ -1,0 +1,34 @@
+# shellcheck shell=bash
+# Scenarios for the rails template: adopt (.ruby-version) and env-skip (DATABASE_URL).
+# Sourced by tests/new-project, which provides the helpers and variables.
+
+adopt_rails_repo() {
+    make_repo "$WORK/src/rails-app" "Gemfile=source 'https://rubygems.org'" ".ruby-version=3.3.6"
+    "$NEW_PROJECT" rails rails-app --from "$WORK/src/rails-app"
+    local p="$PROJECTS_DIR/rails-app"
+    [[ "$(git -C "$p" log --format=%s)" == "init" ]]
+    [[ -f "$p/.devcontainer/devcontainer.json" && -f "$p/compose.yaml" && -f "$p/justfile" ]]
+    [[ -x "$p/.devcontainer/ruby/install.sh" ]]
+    [[ "$(feature_version "$p" '"\.\/ruby"')" == "3.3.6" ]]
+    grep -qx "$p up" "$DEV_LOG"
+}
+
+no_version_file_keeps_template_pin() {
+    make_repo "$WORK/src/nover" "Gemfile=x"
+    "$NEW_PROJECT" rails nover --from "$WORK/src/nover"
+    [[ "$(feature_version "$PROJECTS_DIR/nover" '"\.\/ruby"')" == \
+       "$(feature_version "$SANDBOX/templates/rails/scaffold" '"\.\/ruby"')" ]]
+}
+
+rails_project_gets_no_database_url() {
+    "$NEW_PROJECT" rails railsdb --with postgres
+    local p="$PROJECTS_DIR/railsdb" f
+    for f in .env .env.example; do
+        fails grep -q '^DATABASE_URL=' "$p/$f"
+        grep -qx 'PGHOST=postgres' "$p/$f"
+    done
+}
+
+scenario "Adopt a Rails repo" adopt_rails_repo
+scenario "No version file keeps the template pin" no_version_file_keeps_template_pin
+scenario "Rails project gets PGHOST but no DATABASE_URL" rails_project_gets_no_database_url

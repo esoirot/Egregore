@@ -54,6 +54,7 @@ dev-environment/
 │   ├── _shared/               # compose.yaml, .env.example: copied into every template's scaffold
 │   ├── fastapi/
 │   │   ├── adopt              # --from: pip recipes for requirements.txt-only repos
+│   │   ├── test               # adopt scenarios, run by tests/new-project
 │   │   ├── requirements.justfile
 │   │   ├── vscode-extensions  # --ide=vscode: one extension id per line
 │   │   ├── scaffold/          # always copied
@@ -69,6 +70,7 @@ dev-environment/
 │   │       └── README.md
 │   ├── java/
 │   │   ├── adopt              # --from: .sdkmanrc versions, Maven recipes for pom.xml
+│   │   ├── test
 │   │   ├── maven.justfile     # recipes written by adopt for Maven builds
 │   │   ├── vscode-extensions
 │   │   ├── scaffold/
@@ -77,6 +79,7 @@ dev-environment/
 │   │   └── starter/           # Dockerfile, .dockerignore, README.md
 │   ├── node/
 │   │   ├── adopt              # --from: .nvmrc / .node-version
+│   │   ├── test
 │   │   ├── vscode-extensions
 │   │   ├── scaffold/
 │   │   │   ├── .devcontainer/devcontainer.json
@@ -89,6 +92,7 @@ dev-environment/
 │   │       └── README.md
 │   └── rails/
 │       ├── adopt              # --from: .ruby-version
+│       ├── test
 │       ├── env-skip           # service variables not written for Rails (DATABASE_URL)
 │       ├── vscode-extensions
 │       ├── scaffold/
@@ -99,7 +103,8 @@ dev-environment/
 │       └── starter/           # README.md (rails new generates the rest)
 │
 ├── tests/
-│   ├── new-project            # behavior tests for new-project and dev update (stubbed dev, fixture repos)
+│   ├── new-project            # behavior tests for new-project and dev update (stubbed dev, fixture repos),
+│   │                          # template contract, and each templates/<name>/test
 │   └── dev                    # dev up cleanup, services, host uid ≠ 1000 (real containers)
 │
 ├── scripts/
@@ -463,6 +468,7 @@ templates/go/
 │   ├── Dockerfile, .dockerignore
 │   └── README.md
 ├── adopt                     # optional, for new-project --from and dev update
+├── test                      # optional, scenarios for adopt (run by tests/new-project)
 ├── vscode-extensions         # for --ide=vscode
 └── env-skip                  # optional
 ```
@@ -474,6 +480,7 @@ Start from `templates/node/` and change:
 * `compose.yaml` and `.env.example` come from `templates/_shared/`. Only if the app cannot listen on 3000, copy `templates/_shared/compose.yaml` into `scaffold/` and change the port: a template's own file replaces the shared one (and no longer gets fixes made to it).
 * `starter/`: a minimal working app with a test, the production `Dockerfile` stub, the README. Files that only fit the sample app belong here, not in `scaffold/`.
 * optional `adopt` (executable): called as `adopt <project-dir>` by `new-project` (only when it copied `devcontainer.json`) and by `dev update`, to match the feature version to the repository's version file (see `templates/rails/adopt`) or its build tool (see `templates/java/adopt`). It must be idempotent.
+* optional `test`: given/when/then scenarios for `adopt` (and `env-skip`), sourced by `tests/new-project`; see `templates/java/test`.
 * `vscode-extensions`: one VS Code extension id per line, for `--ide=vscode`.
 * optional `env-skip`: service variables (from `services/*/env`) not to write into this template's projects (see `templates/rails/env-skip`).
 

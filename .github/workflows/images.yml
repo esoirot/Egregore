@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: shellcheck --severity=warning scripts/* tests/* images/*/validate images/*/entrypoint templates/*/adopt templates/*/scaffold/.devcontainer/*/install.sh
+      - run: shellcheck --severity=warning scripts/* tests/* images/*/validate images/*/entrypoint templates/*/adopt templates/*/test templates/*/scaffold/.devcontainer/*/install.sh
 
   images:
     needs: shellcheck
