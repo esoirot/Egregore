@@ -103,6 +103,7 @@ dev-environment/
 │       └── starter/           # README.md (rails new generates the rest)
 │
 ├── tests/
+│   ├── renovate               # every templates/ renovate: comment yields its version (no Docker)
 │   ├── new-project            # behavior tests for new-project and dev update (stubbed dev, fixture repos),
 │   │                          # template contract, and each templates/<name>/test
 │   └── dev                    # dev up cleanup, services, host uid ≠ 1000 (real containers)
@@ -486,7 +487,7 @@ Start from `templates/node/` and change:
 * `vscode-extensions`: one VS Code extension id per line, for `--ide=vscode`.
 * optional `env-skip`: service variables (from `services/*/env`) not to write into this template's projects (see `templates/rails/env-skip`).
 
-Pin every version, and let Renovate find each pin no built-in manager knows (feature options, versions in `install.sh` or the `justfile`) with a comment on the line just above it; the version must be the first number on that line. No change to `renovate.json`:
+Pin every version, and let Renovate find each pin no built-in manager knows (feature options, versions in `install.sh` or the `justfile`) with a comment on the line just above it; the version is the first number on the next line not glued to a letter (`"python3": "3.14"` reads `3.14`; `v1.2` is not read). `tests/renovate` checks every such comment in seconds. No change to `renovate.json`:
 
 ```just
 # renovate: datasource=golang-version depName=go

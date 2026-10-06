@@ -19,12 +19,12 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Template pins annotated on the line above: '# renovate: datasource=<ds> depName=<name> [versioning=<v>] [extractVersion=<re>]' ('//' in JSON files). A new template needs no change here.",
+      "description": "Template pins annotated on the line above: '# renovate: datasource=<ds> depName=<name> [versioning=<v>] [extractVersion=<re>]' ('//' in JSON files). The version is the first number on the next line not glued to a letter, digit or dot (\"3.14\" in '\"python3\": \"3.14\"'; v1.2 is not read). A new template needs no change here.",
       "managerFilePatterns": [
         "/(^|/)templates/.+/"
       ],
       "matchStrings": [
-        "(?:#|//)\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(?:\\s+versioning=(?<versioning>\\S+))?(?:\\s+extractVersion=(?<extractVersion>\\S+))?\\s*\\n[^\\n]*?(?<currentValue>\\d+(?:\\.\\d+)*)"
+        "(?:#|//)\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(?:\\s+versioning=(?<versioning>\\S+))?(?:\\s+extractVersion=(?<extractVersion>\\S+))?[ \\t]*\\n[^\\n]*?[^\\w.\\n](?<currentValue>\\d+(?:\\.\\d+)*)"
       ]
     },
     {

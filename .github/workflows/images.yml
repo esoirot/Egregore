@@ -16,6 +16,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: shellcheck --severity=warning scripts/* tests/* images/*/validate images/*/entrypoint templates/*/adopt templates/*/test templates/*/scaffold/.devcontainer/*/install.sh
+      - name: Renovate annotations are readable
+        run: tests/renovate
 
   images:
     needs: shellcheck
