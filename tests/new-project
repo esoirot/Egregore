@@ -391,6 +391,49 @@ lock_is_written() {
     fails grep -q " src/app.js$" "$lock"
 }
 
+# --- shared scaffold (templates/_shared) -----------------------------------
+
+shared_files_reach_every_template() {
+    local t f
+    for t in $(cd "$SANDBOX/templates" && for d in */; do if [[ -d "$d/scaffold" ]]; then echo "${d%/}"; fi; done); do
+        "$NEW_PROJECT" "$t" "shared-$t"
+        for f in compose.yaml .env.example; do
+            [[ "$(cat "$PROJECTS_DIR/shared-$t/$f")" == \
+               "$(sed -e "s|{{PROJECT_NAME}}|shared-$t|g" -e "s|{{IMAGE}}|$BASE_IMAGE|g" "$SANDBOX/templates/_shared/$f")" ]] \
+                || { echo "$t: $f differs from templates/_shared/$f"; return 1; }
+        done
+    done
+}
+
+template_file_wins_over_shared() {
+    local sb="$WORK/sb-override"; make_sandbox "$sb"
+    printf 'name: {{PROJECT_NAME}}\n# node only\n' > "$sb/templates/node/scaffold/compose.yaml"
+    "$sb/scripts/new-project" node ovr
+    grep -qx "# node only" "$PROJECTS_DIR/ovr/compose.yaml"
+    "$sb/scripts/new-project" fastapi ovr2
+    fails grep -q "# node only" "$PROJECTS_DIR/ovr2/compose.yaml"
+}
+
+shared_is_not_a_template() {
+    fails "$NEW_PROJECT" _shared shr > "$WORK/shr.out" 2>&1
+    [[ ! -e "$PROJECTS_DIR/shr" ]]
+    fails "$NEW_PROJECT" > "$WORK/usage.out" 2>&1
+    grep -qx "  node" "$WORK/usage.out"
+    fails grep -q "_shared" "$WORK/usage.out"
+}
+
+update_brings_shared_fix_to_every_template() {
+    local sb="$WORK/sb-shared"; make_sandbox "$sb"
+    "$sb/scripts/new-project" node shu1
+    "$sb/scripts/new-project" rails shu2
+    echo "# shared fix" >> "$sb/templates/_shared/compose.yaml"
+    local p
+    for p in shu1 shu2; do
+        (cd "$PROJECTS_DIR/$p" && "$sb/scripts/dev.real" update) > /dev/null
+        grep -qx "# shared fix" "$PROJECTS_DIR/$p/compose.yaml"
+    done
+}
+
 # --- dev update -------------------------------------------------------------
 # Each scenario gets its own sandbox, so changing its templates does not leak.
 
@@ -398,7 +441,7 @@ update_replaces_untouched_files() {
     local sb="$WORK/sb-untouched"; make_sandbox "$sb"
     "$sb/scripts/new-project" node upd1
     local p="$PROJECTS_DIR/upd1"
-    echo "# template fix" >> "$sb/templates/node/scaffold/compose.yaml"
+    echo "# template fix" >> "$sb/templates/_shared/compose.yaml"
     (cd "$p" && "$sb/scripts/dev.real" update) > "$WORK/upd1.out"
     grep -qx "# template fix" "$p/compose.yaml"
     grep -q "compose.yaml" "$WORK/upd1.out"
@@ -457,7 +500,7 @@ update_keeps_services_and_ide() {
     local sb="$WORK/sb-svc"; make_sandbox "$sb"
     PATH="$WORK/bin:$PATH" "$sb/scripts/new-project" node upd6 --with postgres --ide=vscode
     local p="$PROJECTS_DIR/upd6"
-    echo "# template fix" >> "$sb/templates/node/scaffold/compose.yaml"
+    echo "# template fix" >> "$sb/templates/_shared/compose.yaml"
     sed -i 's|"name": "{{PROJECT_NAME}}",|"name": "{{PROJECT_NAME}}",\n  "updateContentCommand": "true",|' \
         "$sb/templates/node/scaffold/.devcontainer/devcontainer.json"
     (cd "$p" && "$sb/scripts/dev.real" update) > /dev/null
@@ -521,6 +564,10 @@ scenario "Options work in any order" options_in_any_order
 scenario "requirements.txt-only FastAPI repo gets pip recipes" requirements_only_fastapi_repo
 scenario "FastAPI repo with pyproject.toml keeps uv sync" pyproject_fastapi_repo_keeps_uv_sync
 scenario "Template lock is written" lock_is_written
+scenario "Shared scaffold files reach every template" shared_files_reach_every_template
+scenario "A template's own file wins over the shared one" template_file_wins_over_shared
+scenario "_shared is not a template" shared_is_not_a_template
+scenario "dev update brings a shared fix to every template" update_brings_shared_fix_to_every_template
 scenario "dev update replaces untouched files" update_replaces_untouched_files
 scenario "dev update never overwrites edits" update_never_overwrites_edits
 scenario "dev update skips edited file when template unchanged" update_skips_edited_file_when_template_unchanged

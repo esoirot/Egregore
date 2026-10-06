@@ -38,6 +38,8 @@ render() {
     local template="$1" name="$2" services="$3" ide="$4" starter="$5" out="$6" svc json exts
     local dir="$TEMPLATES_DIR/$template"
 
+    # Files every template shares; the template's own files win.
+    cp -R "$TEMPLATES_DIR/_shared/." "$out/"
     cp -R "$dir/scaffold/." "$out/"
     if [[ "$starter" == yes && -d "$dir/starter" ]]; then
         cp -R "$dir/starter/." "$out/"

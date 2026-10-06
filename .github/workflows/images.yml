@@ -57,6 +57,7 @@ jobs:
         run: |
           set -euo pipefail
           for dir in templates/*/; do
+            [[ -d "$dir/scaffold" ]] || continue  # templates/_shared is not a template
             name="$(basename "$dir")"
             scripts/new-project "$name" "ci-$name"
             # Stop it before the next template: they all publish port 3000.

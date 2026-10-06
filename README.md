@@ -51,6 +51,7 @@ dev-environment/
 │   └── redis/
 │
 ├── templates/                # per template: scaffold/ (dev environment) + starter/ (sample project)
+│   ├── _shared/               # compose.yaml, .env.example: copied into every template's scaffold
 │   ├── fastapi/
 │   │   ├── adopt              # --from: pip recipes for requirements.txt-only repos
 │   │   ├── requirements.justfile
@@ -59,9 +60,7 @@ dev-environment/
 │   │   │   ├── .devcontainer/
 │   │   │   │   ├── devcontainer.json
 │   │   │   │   └── uv/        # local feature: uv + Python baked into the image
-│   │   │   ├── compose.yaml
 │   │   │   ├── justfile
-│   │   │   ├── .env.example
 │   │   │   └── .gitignore
 │   │   └── starter/           # new projects only, never with --from
 │   │       ├── app/main.py, tests/test_main.py
@@ -74,18 +73,14 @@ dev-environment/
 │   │   ├── vscode-extensions
 │   │   ├── scaffold/
 │   │   │   ├── .devcontainer/devcontainer.json
-│   │   │   ├── compose.yaml
-│   │   │   ├── justfile       # `init` runs `gradle init` on first dev up
-│   │   │   └── .env.example
+│   │   │   └── justfile       # `init` runs `gradle init` on first dev up
 │   │   └── starter/           # Dockerfile, .dockerignore, README.md
 │   ├── node/
 │   │   ├── adopt              # --from: .nvmrc / .node-version
 │   │   ├── vscode-extensions
 │   │   ├── scaffold/
 │   │   │   ├── .devcontainer/devcontainer.json
-│   │   │   ├── compose.yaml
 │   │   │   ├── justfile
-│   │   │   ├── .env.example
 │   │   │   └── .gitignore
 │   │   └── starter/
 │   │       ├── src/app.js, src/main.js, test/app.test.js
@@ -100,9 +95,7 @@ dev-environment/
 │       │   ├── .devcontainer/
 │       │   │   ├── devcontainer.json
 │       │   │   └── ruby/      # local feature: builds Ruby with ruby-build
-│       │   ├── compose.yaml
-│       │   ├── justfile       # `init` runs `rails new` on first dev up
-│       │   └── .env.example
+│       │   └── justfile       # `init` runs `rails new` on first dev up
 │       └── starter/           # README.md (rails new generates the rest)
 │
 ├── tests/
@@ -135,7 +128,7 @@ Every directory with an `image.env` (defines `IMAGE`) and a `Dockerfile` is buil
 
 One directory per stack preset, with no image of its own:
 
-* `scaffold/`: the dev environment (`.devcontainer/`, `compose.yaml`, `justfile`, `.env.example`), copied into every project. The stack itself is a list of features in `scaffold/.devcontainer/devcontainer.json`.
+* `scaffold/`: the dev environment (`.devcontainer/`, `justfile`, …), copied into every project, on top of `templates/_shared/` (`compose.yaml`, `.env.example`, the same for every stack; a template's own file of the same name wins). The stack itself is a list of features in `scaffold/.devcontainer/devcontainer.json`.
 * `starter/`: a sample project (app, tests, production `Dockerfile` stub, README), copied only into **new** projects, never into a repository adopted with `--from`.
 * `adopt` (optional, executable): adapts the copied scaffold to an adopted repository (runtime version, build tool).
 
@@ -302,7 +295,7 @@ Projects may add recipes. They should not rename or remove the five contract rec
 
 ## Ports
 
-The scaffold's `compose.yaml` publishes the app's port 3000 on the host:
+The shared `compose.yaml` (`templates/_shared/`) publishes the app's port 3000 on the host:
 
 ```yaml
 ports:
@@ -420,7 +413,7 @@ dev update        # in the project root
 dev down && dev up
 ```
 
-`new-project` records what it installed in `.devcontainer/template.lock` (template, project name, services, IDE, a hash per dev-environment file). `dev update` re-renders the template's current `scaffold/` with the same options, then, file by file:
+`new-project` records what it installed in `.devcontainer/template.lock` (template, project name, services, IDE, a hash per dev-environment file). `dev update` re-renders the template's current `scaffold/` (and `templates/_shared/`) with the same options, then, file by file:
 
 * **unchanged since install** → replaced by the new version
 * **edited by you** → kept; the new version is written next to it as `<file>.template-new` and listed as a conflict (if the template did not change that file, nothing happens)
@@ -461,11 +454,9 @@ A template is a `templates/<name>/` directory with a `scaffold/` and, usually, a
 
 ```text
 templates/go/
-├── scaffold/                 # dev environment, always copied
+├── scaffold/                 # dev environment, always copied (on top of templates/_shared/)
 │   ├── .devcontainer/devcontainer.json
-│   ├── compose.yaml
 │   ├── justfile
-│   ├── .env.example
 │   └── .gitignore
 ├── starter/                  # sample project, new projects only
 │   ├── main.go, main_test.go, go.mod
@@ -480,7 +471,7 @@ Start from `templates/node/` and change:
 
 * `scaffold/.devcontainer/devcontainer.json`: the features (e.g. `ghcr.io/devcontainers/features/go:1`). If no published feature supports the version you need, write a local one in `.devcontainer/<name>/` (`devcontainer-feature.json` + `install.sh`; see `templates/rails` and `templates/fastapi`). For a stack whose app is generated by a tool (like `rails new` or `gradle init`), use `postCreateCommand` to run an idempotent `just init` recipe that never runs over existing code (see `templates/rails` and `templates/java`).
 * `scaffold/justfile`: what the five contract recipes run. Keep them generic enough for adopted repositories.
-* `scaffold/compose.yaml`: the app port, if not 3000.
+* `compose.yaml` and `.env.example` come from `templates/_shared/`. Only if the app cannot listen on 3000, copy `templates/_shared/compose.yaml` into `scaffold/` and change the port: a template's own file replaces the shared one (and no longer gets fixes made to it).
 * `starter/`: a minimal working app with a test, the production `Dockerfile` stub, the README. Files that only fit the sample app belong here, not in `scaffold/`.
 * optional `adopt` (executable): called as `adopt <project-dir>` by `new-project` (only when it copied `devcontainer.json`) and by `dev update`, to match the feature version to the repository's version file (see `templates/rails/adopt`) or its build tool (see `templates/java/adopt`). It must be idempotent.
 * `vscode-extensions`: one VS Code extension id per line, for `--ide=vscode`.
