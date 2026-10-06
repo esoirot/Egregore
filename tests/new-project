@@ -518,8 +518,13 @@ scenario "dev update without a lock explains and changes nothing" update_without
 
 # Each template's own scenarios (adopt, env-skip), kept next to it in templates/<name>/test.
 for f in "$SANDBOX"/templates/*/test; do
+    if [[ ! -f "$f" ]]; then continue; fi
+    ran=$((PASSED + FAILED))
     # shellcheck source=/dev/null  # checked on its own in CI
-    if [[ -f "$f" ]]; then source "$f"; fi
+    source "$f"
+    if [[ $((PASSED + FAILED)) -eq $ran ]]; then
+        FAILED=$((FAILED + 1)); echo "✗ ${f#"$SANDBOX"/} runs no scenario (missing scenario lines?)"
+    fi
 done
 
 echo
