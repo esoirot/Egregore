@@ -484,7 +484,7 @@ Placeholders replaced by `new-project` in the template files it copies (never in
 | `{{PROJECT_NAME}}` | the project name                     |
 | `{{IMAGE}}`        | `IMAGE` from `images/base/image.env` |
 
-Keep the contract: service `dev`, `/workspace`, `remoteUser: dev`, `env_file: .env` in `compose.yaml`, the five `just` recipes, a `vscode-extensions` file, and placeholders instead of hardcoded image tags. Open a pull request: CI generates a project from the new template and runs `just --list` in it.
+Keep the contract: service `dev`, `/workspace`, `remoteUser: dev`, `env_file: .env` in `compose.yaml`, the five `just` recipes, a `vscode-extensions` file, and placeholders instead of hardcoded image tags. `tests/new-project` checks this contract for every template it finds (no test to add): run it before opening a pull request. CI also generates a project from the new template and runs `just --list` in it.
 
 # Adding a Service
 

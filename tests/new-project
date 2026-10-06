@@ -41,6 +41,16 @@ mkdir -p "$PROJECTS_DIR"
 
 source "$SANDBOX/images/base/image.env"
 BASE_IMAGE="$IMAGE"
+source "$SANDBOX/images/devcontainer-cli/image.env"
+CLI_IMAGE="$IMAGE"
+
+# template_names: every template of the sandbox (a directory with a scaffold/).
+template_names() {
+    local d
+    for d in "$SANDBOX"/templates/*/; do
+        if [[ -d "$d/scaffold" ]]; then basename "$d"; fi
+    done
+}
 
 # make_repo <dir> <path>=<content>... : a committed git repo with the given files.
 make_repo() {
@@ -391,11 +401,63 @@ lock_is_written() {
     fails grep -q " src/app.js$" "$lock"
 }
 
+# --- template contract --------------------------------------------------------
+
+# read_configuration <project>: the configuration the Dev Containers CLI resolves (JSON).
+read_configuration() {
+    docker run --rm --user "$(id -u):$(id -g)" --group-add "$(stat -c %g /var/run/docker.sock)" -e HOME=/tmp \
+        -v /var/run/docker.sock:/var/run/docker.sock -v "$1:$1" -w "$1" \
+        "$CLI_IMAGE" read-configuration --workspace-folder "$1" 2>/dev/null
+}
+
+# check_contract <sandbox> <template>: projects made from the template (with and without
+# --ide=vscode) keep the team contract. Prints the broken rule on failure.
+check_contract() {
+    local sb="$1" t="$2" dir="$1/templates/$2" ide p recipes r
+    [[ -s "$dir/vscode-extensions" ]] || { echo "$t: vscode-extensions missing or empty"; return 1; }
+    if [[ -e "$dir/adopt" && ! -x "$dir/adopt" ]]; then echo "$t: adopt is not executable"; return 1; fi
+    for ide in "" vscode; do
+        p="$PROJECTS_DIR/${sb##*/}-$t${ide:+-$ide}"
+        PATH="$WORK/bin:$PATH" "$sb/scripts/new-project" "$t" "${p##*/}" ${ide:+"--ide=$ide"} > /dev/null \
+            || { echo "$t: new-project failed"; return 1; }
+        read_configuration "$p" | python3 -c 'import json, sys
+c = json.load(sys.stdin)["configuration"]
+assert (c.get("service"), c.get("remoteUser"), c.get("workspaceFolder")) == ("dev", "dev", "/workspace")
+if sys.argv[1]:
+    assert c["customizations"]["vscode"]["extensions"] == open(sys.argv[2]).read().split()' "$ide" "$dir/vscode-extensions" \
+            || { echo "$t${ide:+ --ide=$ide}: devcontainer.json does not resolve to service dev, remoteUser dev, /workspace${ide:+ and vscode-extensions}"; return 1; }
+    done
+    docker compose -f "$p/compose.yaml" config --format json | python3 -c 'import json, sys
+dev = json.load(sys.stdin)["services"]["dev"]
+assert dev["image"] == sys.argv[1] and "APP_PORT" in dev.get("environment", {})' "$BASE_IMAGE" \
+        || { echo "$t: compose service dev must use the base image and load .env (env_file)"; return 1; }
+    head -1 "$p/justfile" | grep -q '^# Team command contract' \
+        || { echo "$t: justfile lacks the '# Team command contract' header (adopt variants rely on it)"; return 1; }
+    recipes=" $(docker run --rm -v "$p:/workspace" "$BASE_IMAGE" just --summary) "
+    for r in install dev test lint build; do
+        [[ "$recipes" == *" $r "* ]] || { echo "$t: justfile lacks recipe $r"; return 1; }
+    done
+}
+
+contract_check_catches_missing_recipe() {
+    local sb="$WORK/sb-norecipe"; make_sandbox "$sb"
+    sed -i 's/^test \*args:/check *args:/' "$sb/templates/node/scaffold/justfile"
+    check_contract "$sb" node > "$WORK/norecipe.out" && return 1
+    grep -q "node: justfile lacks recipe test" "$WORK/norecipe.out"
+}
+
+contract_check_catches_trailing_blank_line() {
+    local sb="$WORK/sb-blank"; make_sandbox "$sb"
+    echo >> "$sb/templates/node/scaffold/.devcontainer/devcontainer.json"
+    check_contract "$sb" node > "$WORK/blank.out" && return 1
+    grep -q "node --ide=vscode: devcontainer.json" "$WORK/blank.out"
+}
+
 # --- shared scaffold (templates/_shared) -----------------------------------
 
 shared_files_reach_every_template() {
     local t f
-    for t in $(cd "$SANDBOX/templates" && for d in */; do if [[ -d "$d/scaffold" ]]; then echo "${d%/}"; fi; done); do
+    for t in $(template_names); do
         "$NEW_PROJECT" "$t" "shared-$t"
         for f in compose.yaml .env.example; do
             [[ "$(cat "$PROJECTS_DIR/shared-$t/$f")" == \
@@ -564,6 +626,11 @@ scenario "Options work in any order" options_in_any_order
 scenario "requirements.txt-only FastAPI repo gets pip recipes" requirements_only_fastapi_repo
 scenario "FastAPI repo with pyproject.toml keeps uv sync" pyproject_fastapi_repo_keeps_uv_sync
 scenario "Template lock is written" lock_is_written
+for t in $(template_names); do
+    scenario "Template $t keeps the contract" check_contract "$SANDBOX" "$t"
+done
+scenario "Contract check catches a missing recipe" contract_check_catches_missing_recipe
+scenario "Contract check catches a trailing blank line in devcontainer.json" contract_check_catches_trailing_blank_line
 scenario "Shared scaffold files reach every template" shared_files_reach_every_template
 scenario "A template's own file wins over the shared one" template_file_wins_over_shared
 scenario "_shared is not a template" shared_is_not_a_template
