@@ -46,7 +46,7 @@ jobs:
           done
 
       - name: new-project behavior tests
-        run: tests/new-project-from
+        run: tests/new-project
 
       - name: dev behavior tests
         run: tests/dev

@@ -4,6 +4,10 @@ services:
   dev:
     image: {{IMAGE}}
     working_dir: /workspace
+    # .env reaches every process in the container, not only just recipes (dev down && dev up after edits).
+    env_file:
+      - path: .env
+        required: false
     volumes:
       - .:/workspace
     ports:

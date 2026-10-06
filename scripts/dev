@@ -12,6 +12,7 @@ usage() {
     echo "  shell         open a bash shell in the dev container"
     echo "  exec <cmd>    run a command in the dev container"
     echo "  down          stop and remove the project's containers"
+    echo "  update        bring template fixes into this project (then dev down && dev up)"
     exit 1
 }
 
@@ -45,5 +46,6 @@ case "${1:-}" in
     shell) devcontainer exec bash ;;
     exec)  shift; [[ $# -gt 0 ]] || usage; devcontainer exec "$@" ;;
     down)  docker compose down ;;
+    update) exec "$REPO_ROOT/scripts/new-project" --update ;;
     *)     usage ;;
 esac

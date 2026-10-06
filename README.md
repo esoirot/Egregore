@@ -17,9 +17,10 @@ Windows 11
     └── Ubuntu (git + Docker Engine only)
         └── Docker Engine
             ├── devcontainer-cli container   ← runs `dev` commands, then exits
-            └── Project containers
-                ├── base image (Ubuntu, dev user, git, just)
-                └── + project features (Node, Python, ...)
+            └── Project containers (one compose project each)
+                ├── dev: base image (Ubuntu, dev user, git, just)
+                │        + project features (Node, Python, ...)
+                └── optional services (postgres, redis)
 ```
 
 Source code stays on the WSL filesystem and is bind-mounted into the project container at `/workspace`.
@@ -44,8 +45,15 @@ dev-environment/
 │       ├── image.env
 │       └── validate
 │
+├── services/                  # optional services for new-project --with
+│   ├── postgres/              # compose.yaml (pinned image, volume, healthcheck) + env
+│   └── redis/
+│
 ├── templates/                # per template: scaffold/ (dev environment) + starter/ (sample project)
 │   ├── fastapi/
+│   │   ├── adopt              # --from: pip recipes for requirements.txt-only repos
+│   │   ├── requirements.justfile
+│   │   ├── vscode-extensions  # --ide=vscode: one extension id per line
 │   │   ├── scaffold/          # always copied
 │   │   │   ├── .devcontainer/
 │   │   │   │   ├── devcontainer.json
@@ -62,6 +70,7 @@ dev-environment/
 │   ├── java/
 │   │   ├── adopt              # --from: .sdkmanrc versions, Maven recipes for pom.xml
 │   │   ├── maven.justfile     # recipes written by adopt for Maven builds
+│   │   ├── vscode-extensions
 │   │   ├── scaffold/
 │   │   │   ├── .devcontainer/devcontainer.json
 │   │   │   ├── compose.yaml
@@ -70,6 +79,7 @@ dev-environment/
 │   │   └── starter/           # Dockerfile, .dockerignore, README.md
 │   ├── node/
 │   │   ├── adopt              # --from: .nvmrc / .node-version
+│   │   ├── vscode-extensions
 │   │   ├── scaffold/
 │   │   │   ├── .devcontainer/devcontainer.json
 │   │   │   ├── compose.yaml
@@ -83,6 +93,8 @@ dev-environment/
 │   │       └── README.md
 │   └── rails/
 │       ├── adopt              # --from: .ruby-version
+│       ├── env-skip           # service variables not written for Rails (DATABASE_URL)
+│       ├── vscode-extensions
 │       ├── scaffold/
 │       │   ├── .devcontainer/
 │       │   │   ├── devcontainer.json
@@ -93,14 +105,14 @@ dev-environment/
 │       └── starter/           # README.md (rails new generates the rest)
 │
 ├── tests/
-│   ├── new-project-from       # behavior tests for new-project (stubbed dev, local fixture repos)
-│   └── dev                    # behavior test for dev up cleanup (real containers)
+│   ├── new-project            # behavior tests for new-project and dev update (stubbed dev, fixture repos)
+│   └── dev                    # dev up cleanup and service reachability (real containers)
 │
 ├── scripts/
 │   ├── bootstrap              # host setup (Docker Engine, systemd, docker group)
 │   ├── install                # PATH + build/validate images
-│   ├── new-project            # generate a project from a template, or adopt a repo (--from)
-│   └── dev                    # per-project entry point
+│   ├── new-project            # create a project, adopt a repo (--from), add services (--with), IDE (--ide)
+│   └── dev                    # per-project entry point (up, shell, exec, down, update)
 │
 ├── .github/workflows/
 │   └── images.yml             # CI: shellcheck, build + validate images, smoke-test templates
@@ -130,11 +142,11 @@ One directory per stack preset, with no image of its own:
 | `fastapi` | Python 3.14.8, FastAPI 0.142.2, uv 0.12.23, pytest, ruff | Local `uv` feature installs uv and bakes Python into the image (no compile, about 10 s). Ships a working app (`/`, `/health`) and tests; `postCreateCommand` runs `just install` (`uv sync`, creates `uv.lock`). Python 3.15 is not final yet (rc), so 3.14 is the latest stable. Ships a production `Dockerfile` stub. |
 | `java`   | JDK 27.0.0 (Amazon Corretto), Gradle 9.8.0, JUnit 6 (Jupiter) | Official `java` feature (SDKMAN). Plain Java, no framework. On first `dev up`, `just init` runs `gradle init` (Java application, Kotlin DSL, wrapper pinned to 9.8.0, toolchain 27). Corretto because SDKMAN has no Temurin build of 27. Ships a production `Dockerfile` stub. |
 | `node`   | Node 26.10.0, pnpm 12.9.1, Biome 2.5.15 | Official `node` feature. Ships a working app on Node built-ins (`node:http`, `/` and `/health`) and tests (`node:test`); Biome for lint and format. `postCreateCommand` runs `just install` (creates `pnpm-lock.yaml`). Ships a production `Dockerfile` stub. |
-| `rails`  | Ruby 4.0.7, Rails 8.1.4, SQLite | Local `ruby` feature (the official one does not support Ruby 4), so the first `dev up` compiles Ruby (a few minutes, then cached). On first `dev up`, `just init` runs `rails new` (app named after the project); Rails generates its own production `Dockerfile` and Kamal config. |
+| `rails`  | Ruby 4.0.7, Rails 8.1.4, SQLite (PostgreSQL with `--with postgres`) | Local `ruby` feature (the official one does not support Ruby 4), so the first `dev up` compiles Ruby (a few minutes, then cached). On first `dev up`, `just init` runs `rails new` (app named after the project); Rails generates its own production `Dockerfile` and Kamal config. |
 
 ### `.github/workflows/images.yml`
 
-On every pull request and push to `main`: `shellcheck` on the scripts, tests, adopt hooks and local feature installers; build and validate every image; run `tests/new-project-from` and `tests/dev`; then generate a project from every template and run `just --list` inside it.
+On every pull request and push to `main`: `shellcheck` on the scripts, tests, adopt hooks and local feature installers; build and validate every image; run `tests/new-project` and `tests/dev`; then generate a project from every template and run `just --list` inside it.
 
 Publishing to GitHub Container Registry (GHCR) is **disabled**. To enable it:
 
@@ -210,6 +222,26 @@ PROJECTS_DIR=~/work new-project node my-poc
 APP_PORT=3100 new-project node my-poc
 ```
 
+Options (any order, also combined with `--from`):
+
+```bash
+new-project rails shop --with postgres,redis    # add services
+new-project fastapi api --ide=vscode            # VS Code extensions + open the project
+```
+
+## Services (`--with`)
+
+`--with` adds services next to the dev container, from `services/`:
+
+| Service    | Image                         | Variables in `.env`                                       |
+| ---------- | ----------------------------- | --------------------------------------------------------- |
+| `postgres` | Postgres 18.6 (user, password and database `dev`) | `DATABASE_URL`, `PGHOST`, `PGUSER`, `PGPASSWORD` |
+| `redis`    | Redis 8.10.2                  | `REDIS_URL`                                               |
+
+Each service becomes a `compose.<service>.yaml` in the project, included from `compose.yaml`, with a named volume (data survives `dev down`) and a healthcheck. Services are not published on the host: the app reaches them by name (`postgres:5432`, `redis:6379`). For a GUI client, run it in a container on the same network, or open a shell with `docker compose exec postgres psql -U dev`.
+
+Rails projects get the `PG*` variables but no `DATABASE_URL`: Rails would apply it to every environment, so tests would run against the dev database. With `PGHOST`, Rails keeps separate `<app>_development` and `<app>_test` databases from `database.yml`, and `rails new` generates a PostgreSQL app.
+
 ## Adopting an Existing Repository
 
 To work on an existing repository in this environment, clone it through `new-project` with `--from`:
@@ -227,11 +259,11 @@ It clones the repository into `~/projects/my-app`, then adds the template's dev 
 * **Runtime version follows the repository**: `.ruby-version` (rails), `.nvmrc` or `.node-version` (node), `.sdkmanrc` `java=` / `gradle=` (java). For fastapi, uv reads `.python-version` directly. Without a version file, the template's pin is kept.
 * **Generators never run over existing code**: `rails new` is skipped when a `Gemfile` exists, `gradle init` when any Gradle or Maven build exists.
 * **Build tool follows the repository**: for a `pom.xml` build, the `java` recipes switch to Maven (`./mvnw` if the repository has the wrapper, otherwise `mvn`, installed through the java feature). `just dev` runs `spring-boot:run` for Spring Boot; for other Maven apps it explains how to set the main class.
-* **FastAPI app location is discovered**: `just dev` finds the app in `main.py`, `app.py`, `api.py` or `app/{main,app,api}.py`, and `just build` byte-compiles the whole project.
+* **FastAPI app location is discovered**: `just dev` finds the app in `main.py`, `app.py`, `api.py` or `app/{main,app,api}.py`, and `just build` byte-compiles the whole project. A repository with only `requirements.txt` (no `pyproject.toml`) gets pip-style recipes: `uv venv` + `uv pip install -r requirements.txt` (and `requirements-dev.txt`), ruff run through `uvx`.
 * **`.env`** is created from `.env.example` if missing, and `APP_PORT` is added if the repository's example lacks it.
 * The copied files are listed at the end. They stay **untracked**: commit them if the team adopts this setup, or list them in `.git/info/exclude` to keep them local.
 
-Still manual: database and other services (add them to `compose.yaml`), other app layouts (for example a FastAPI app outside the discovered paths, or a non-Spring Maven app: edit the `dev` recipe), and Python repositories with only a `requirements.txt` (`uv sync` needs a `pyproject.toml`).
+Still manual: other app layouts (for example a FastAPI app outside the discovered paths, or a non-Spring Maven app: edit the `dev` recipe). A repository that ships its own `compose.yaml` keeps it, so `--with` cannot wire services into it.
 
 If the repository has its own `.devcontainer/devcontainer.json`, it is kept and `new-project` prints a note: merge it with the template's by hand.
 
@@ -245,7 +277,8 @@ From the project root, on the host:
 dev up        # build the container (base image + features) and start it
 dev shell     # bash inside the container
 dev exec <cmd>
-dev down      # stop and remove the project's containers
+dev down      # stop and remove the project's containers (service data volumes are kept)
+dev update    # bring template fixes into this project
 ```
 
 Inside the container, every project speaks the same commands:
@@ -273,6 +306,8 @@ The scaffold's `compose.yaml` publishes the app's port 3000 on the host:
 ports:
   - "127.0.0.1:${APP_PORT:-3000}:3000"
 ```
+
+`.env` is loaded into the dev container (`env_file`), so every process sees its variables, not only `just` recipes. After editing `.env`, run `dev down && dev up`.
 
 Open `http://localhost:3000` from Windows. To run several POCs at once, set a different `APP_PORT` in each project's `.env` (created by `new-project` from `.env.example`).
 
@@ -321,12 +356,20 @@ Keep source code on the WSL filesystem (`~/projects/...`), not under `/mnt/c/...
 
 Any editor works on the files. Tools that support the open [Dev Containers spec](https://containers.dev) (VS Code, JetBrains IDEs, GitHub Codespaces) can attach using the same `.devcontainer/devcontainer.json`, which reuses the project's `compose.yaml`. Editors without support ignore it.
 
-Every template's configuration resolves with the official Dev Containers CLI (`devcontainer read-configuration`), the engine VS Code uses. Attaching from an IDE GUI has not been tested yet. To check it with VS Code on Windows:
+## VS Code (`--ide=vscode`)
 
-1. Install the **WSL** and **Dev Containers** extensions; in the Dev Containers settings, enable **Execute In WSL** (uses Docker Engine inside WSL, no Docker Desktop).
-2. In WSL: `new-project node ide-check`, then `cd ~/projects/ide-check && code .`.
-3. Run **Dev Containers: Reopen in Container**. Expect the window to reopen in `/workspace` as `dev`, with a terminal where `just --list` works.
-4. `dev down` and remove the project afterwards.
+```bash
+new-project fastapi api --ide=vscode
+```
+
+adds the template's VS Code extensions to `devcontainer.json` (`customizations.vscode.extensions`: Ruby LSP for rails; Python + Ruff for fastapi; Biome for node; Java pack + Gradle for java) and runs `code .` at the end, if the `code` CLI is on the `PATH` (VS Code's WSL integration). VS Code then offers **Reopen in Container**. Other editors ignore the `customizations` block.
+
+One-time setup on Windows:
+
+1. Install the **WSL** and **Dev Containers** extensions.
+2. In the Dev Containers settings, enable **Execute In WSL**, so VS Code uses Docker Engine inside WSL (no Docker Desktop).
+
+Every template's configuration, with and without `--ide=vscode`, resolves with the official Dev Containers CLI (`devcontainer read-configuration`), the engine VS Code uses. The GUI attach itself has not been tested yet: after **Reopen in Container**, expect the window in `/workspace` as `dev`, with a terminal where `just --list` works.
 
 ---
 
@@ -346,7 +389,7 @@ docker build -t my-poc .
 2. **Declare the stack in `devcontainer.json`.** No manual installs in running containers.
 3. **Keep the `just` contract.** `install`, `dev`, `test`, `lint`, `build` in every project.
 4. **Use versioned, pinned images.** Tags are versioned (never `latest`); base images are pinned by digest in the Dockerfiles.
-5. **Change shared environments here.** Edit `images/` or `templates/` in this repository, not individual projects' copies.
+5. **Change shared environments here.** Edit `images/`, `templates/` or `services/` in this repository, not individual projects' copies; projects pick changes up with `dev update`.
 6. **Keep application config in the application repository.**
 
 ---
@@ -366,7 +409,23 @@ dev down
 dev up
 ```
 
-Scaffolds are copied once: changes to a template only reach new projects. Port fixes from a template to existing projects by hand when needed.
+## Updating a project from its template
+
+Template fixes (and a new base image tag) reach an existing project with:
+
+```bash
+dev update        # in the project root
+dev down && dev up
+```
+
+`new-project` records what it installed in `.devcontainer/template.lock` (template, project name, services, IDE, a hash per dev-environment file). `dev update` re-renders the template's current `scaffold/` with the same options, then, file by file:
+
+* **unchanged since install** → replaced by the new version
+* **edited by you** → kept; the new version is written next to it as `<file>.template-new` and listed as a conflict (if the template did not change that file, nothing happens)
+* **new in the template** → added
+* **deleted by you** → stays deleted
+
+The `adopt` hook runs again, so versions and build tools taken from the repository (`.ruby-version`, `pom.xml`, …) are kept. `starter/` files (the sample app) are yours after creation and never updated. Projects created before `template.lock` existed must be updated by hand.
 
 To bump a pinned version (base image digest, Dev Containers CLI, or a template's runtime and tools), edit the `FROM` line or version in the relevant `Dockerfile`, `devcontainer.json` or `justfile`, and bump `IMAGE` in `image.env` when an image changes. Some templates pin the same version in several files (for example the dev feature and the production `Dockerfile`); `CLAUDE.md` lists where.
 
@@ -388,7 +447,9 @@ templates/go/
 │   ├── main.go, main_test.go, go.mod
 │   ├── Dockerfile, .dockerignore
 │   └── README.md
-└── adopt                     # optional, for new-project --from
+├── adopt                     # optional, for new-project --from and dev update
+├── vscode-extensions         # for --ide=vscode
+└── env-skip                  # optional
 ```
 
 Start from `templates/node/` and change:
@@ -397,16 +458,31 @@ Start from `templates/node/` and change:
 * `scaffold/justfile`: what the five contract recipes run. Keep them generic enough for adopted repositories.
 * `scaffold/compose.yaml`: the app port, if not 3000.
 * `starter/`: a minimal working app with a test, the production `Dockerfile` stub, the README. Files that only fit the sample app belong here, not in `scaffold/`.
-* optional `adopt` (executable): called by `new-project --from` as `adopt <project-dir>`, only when it copied `devcontainer.json`, to match the feature version to the repository's version file (see `templates/rails/adopt`) or its build tool (see `templates/java/adopt`).
+* optional `adopt` (executable): called as `adopt <project-dir>` by `new-project` (only when it copied `devcontainer.json`) and by `dev update`, to match the feature version to the repository's version file (see `templates/rails/adopt`) or its build tool (see `templates/java/adopt`). It must be idempotent.
+* `vscode-extensions`: one VS Code extension id per line, for `--ide=vscode`.
+* optional `env-skip`: service variables (from `services/*/env`) not to write into this template's projects (see `templates/rails/env-skip`).
 
-Placeholders replaced in every file by `new-project`:
+Placeholders replaced by `new-project` in the template files it copies (never in a repository's own files):
 
 | Placeholder        | Value                                |
 | ------------------ | ------------------------------------ |
 | `{{PROJECT_NAME}}` | the project name                     |
 | `{{IMAGE}}`        | `IMAGE` from `images/base/image.env` |
 
-Keep the contract: service `dev`, `/workspace`, `remoteUser: dev`, the five `just` recipes, and placeholders instead of hardcoded image tags. Open a pull request: CI generates a project from the new template and runs `just --list` in it.
+Keep the contract: service `dev`, `/workspace`, `remoteUser: dev`, `env_file: .env` in `compose.yaml`, the five `just` recipes, a `vscode-extensions` file, and placeholders instead of hardcoded image tags. Open a pull request: CI generates a project from the new template and runs `just --list` in it.
+
+# Adding a Service
+
+A service is a `services/<name>/` directory, available to `new-project --with <name>` with no script changes:
+
+```text
+services/mysql/
+├── compose.yaml   # one service named like the directory, image pinned by tag + digest,
+│                  # named volume, healthcheck, no published ports
+└── env            # KEY=value lines added to the project's .env and .env.example
+```
+
+Start from `services/postgres/`. Use the service name as the host in the variables (`mysql:3306`), since the app reaches it over the compose network. If a variable misleads a framework, list it in that template's `env-skip` (see `templates/rails/env-skip`). Add a `tests/new-project` scenario for the generated files and, for a cheap image, a reachability check in `tests/dev`.
 
 ---
 

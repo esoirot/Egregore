@@ -1,0 +1,4 @@
+# Service variables new-project does not write into Rails projects.
+# Rails would apply DATABASE_URL to every environment, so tests would run against
+# the dev database; Rails uses database.yml + PGHOST instead.
+DATABASE_URL

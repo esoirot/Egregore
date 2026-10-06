@@ -16,7 +16,7 @@ WORK="$(mktemp -d "$HOME/.egregore-test.XXXXXX")"
 PROJECT="$WORK/dev-cleanup-test"
 cleanup() {
     docker rm -f "$BLOCKER" >/dev/null 2>&1 || true
-    (cd "$PROJECT" 2>/dev/null && docker compose down >/dev/null 2>&1) || true
+    (cd "$PROJECT" 2>/dev/null && docker compose down --volumes >/dev/null 2>&1) || true
     # The CLI builds a uid-remapping image per run (name depends on the temp path).
     docker images --format '{{.Repository}}' | grep '^vsc-dev-cleanup-test-' | xargs -r docker image rm >/dev/null 2>&1 || true
     rm -rf "$WORK"
@@ -58,3 +58,14 @@ docker rm -f "$BLOCKER" >/dev/null
 PORTS="$(docker ps --filter label=com.docker.compose.project=dev-cleanup-test --format '{{.Ports}}')"
 [[ "$PORTS" == *"127.0.0.1:$PORT->3000/tcp"* ]] || { echo "✗ port not published: '$PORTS'"; exit 1; }
 echo "✓ the container publishes 127.0.0.1:$PORT->3000"
+
+echo "Given the project includes the redis service (as new-project --with redis does)"
+"$DEV" down > /dev/null 2>&1
+cp "$REPO_ROOT/services/redis/compose.yaml" compose.redis.yaml
+{ echo "include:"; echo "  - compose.redis.yaml"; echo; cat compose.yaml; } > compose.yaml.new && mv compose.yaml.new compose.yaml
+echo "When I run dev up"
+"$DEV" up > "$WORK/up3.log" 2>&1 || { echo "✗ dev up with redis failed"; tail -5 "$WORK/up3.log"; exit 1; }
+docker compose exec -T dev bash -c 'exec 3<>/dev/tcp/redis/6379 && printf "PING\r\n" >&3 && head -c 5 <&3' > "$WORK/ping" \
+    || { echo "✗ redis not reachable from the dev container"; exit 1; }
+grep -q PONG "$WORK/ping" || { echo "✗ unexpected redis answer: $(cat "$WORK/ping")"; exit 1; }
+echo "✓ the dev container reaches redis by name"

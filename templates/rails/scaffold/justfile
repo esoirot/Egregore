@@ -15,7 +15,9 @@ init:
     set -euo pipefail
     if [[ ! -f Gemfile ]]; then
         gem install rails --version {{rails_version}} --no-document
-        rails _{{rails_version}}_ new . --name={{PROJECT_NAME}} --skip
+        database=sqlite3
+        if [[ -n "${PGHOST:-}" ]]; then database=postgresql; fi
+        rails _{{rails_version}}_ new . --name={{PROJECT_NAME}} --skip --database="$database"
         # Rails ignores /.env*; keep the example committed.
         echo '!/.env.example' >> .gitignore
     fi

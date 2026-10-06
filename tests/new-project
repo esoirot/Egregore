@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Behavior tests for `new-project <template> <name> --from <repo>`.
+# Behavior tests for `new-project` (create, --from, --with, --ide, --update / dev update).
 # Runs new-project against local fixture repos, with scripts/dev stubbed out
-# (records calls instead of starting containers). Needs the base image locally.
-# Usage: tests/new-project-from
+# (records calls instead of starting containers) and `code` stubbed. Needs the base image locally.
+# Usage: tests/new-project
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -11,18 +11,28 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d "$HOME/.egregore-test.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
-# Sandbox copy of this repo (git-visible files only) with a stub dev script.
+# make_sandbox <dir>: copy of this repo (git-visible files only) with a stub dev script.
+# The real dev script stays available as scripts/dev.real (for `dev update`).
+make_sandbox() {
+    mkdir -p "$1"
+    # ls-files also lists tracked files deleted or moved in the working tree: keep existing ones.
+    git -C "$REPO_ROOT" ls-files -co --exclude-standard \
+        | while IFS= read -r f; do if [[ -e "$REPO_ROOT/$f" ]]; then echo "$f"; fi; done \
+        | tar -C "$REPO_ROOT" -cf - -T - | tar -C "$1" -xf -
+    mv "$1/scripts/dev" "$1/scripts/dev.real"
+    printf '#!/usr/bin/env bash\necho "$PWD $*" >> "$DEV_LOG"\n' > "$1/scripts/dev"
+    chmod +x "$1/scripts/dev"
+}
+
 SANDBOX="$WORK/egregore"
-mkdir -p "$SANDBOX"
-# ls-files also lists tracked files deleted or moved in the working tree: keep existing ones.
-git -C "$REPO_ROOT" ls-files -co --exclude-standard \
-    | while IFS= read -r f; do [[ -e "$REPO_ROOT/$f" ]] && echo "$f"; done \
-    | tar -C "$REPO_ROOT" -cf - -T - | tar -C "$SANDBOX" -xf -
-cat > "$SANDBOX/scripts/dev" <<'EOF'
-#!/usr/bin/env bash
-echo "$PWD $*" >> "$DEV_LOG"
-EOF
-chmod +x "$SANDBOX/scripts/dev"
+make_sandbox "$SANDBOX"
+
+# Stub `code` (VS Code CLI): records where it was opened.
+mkdir -p "$WORK/bin"
+printf '#!/usr/bin/env bash\necho "$PWD $*" >> "$CODE_LOG"\n' > "$WORK/bin/code"
+chmod +x "$WORK/bin/code"
+export CODE_LOG="$WORK/code.log"
+touch "$CODE_LOG"
 
 NEW_PROJECT="$SANDBOX/scripts/new-project"
 export PROJECTS_DIR="$WORK/projects"
@@ -261,6 +271,203 @@ new_fastapi_project_gets_starter() {
     grep -q "^# fresh" "$p/README.md"
 }
 
+services_on_new_project() {
+    "$NEW_PROJECT" node svc --with postgres,redis
+    local p="$PROJECTS_DIR/svc"
+    [[ -f "$p/compose.postgres.yaml" && -f "$p/compose.redis.yaml" ]]
+    grep -q '^include:' "$p/compose.yaml"
+    grep -qx '  - compose.postgres.yaml' "$p/compose.yaml"
+    grep -qx '  - compose.redis.yaml' "$p/compose.yaml"
+    grep -q '@sha256:' "$p/compose.postgres.yaml"
+    local f
+    for f in .env .env.example; do
+        grep -qx 'DATABASE_URL=postgres://dev:dev@postgres:5432/dev' "$p/$f"
+        grep -qx 'PGHOST=postgres' "$p/$f"
+        grep -qx 'REDIS_URL=redis://redis:6379/0' "$p/$f"
+    done
+}
+
+unknown_service_fails() {
+    fails "$NEW_PROJECT" node nosvc --with mongo > "$WORK/nosvc.out" 2>&1
+    grep -q "postgres" "$WORK/nosvc.out"
+    [[ ! -e "$PROJECTS_DIR/nosvc" ]]
+}
+
+services_with_adopted_repo() {
+    make_repo "$WORK/src/svcrepo" ".env.example=FOO=bar" "package.json={}"
+    "$NEW_PROJECT" node svcrepo --with postgres --from "$WORK/src/svcrepo"
+    local p="$PROJECTS_DIR/svcrepo"
+    cmp "$WORK/src/svcrepo/.env.example" "$p/.env.example"
+    grep -qx 'DATABASE_URL=postgres://dev:dev@postgres:5432/dev' "$p/.env"
+    grep -qx 'FOO=bar' "$p/.env"
+    grep -qx '  - compose.postgres.yaml' "$p/compose.yaml"
+}
+
+rails_project_gets_no_database_url() {
+    "$NEW_PROJECT" rails railsdb --with postgres
+    local p="$PROJECTS_DIR/railsdb" f
+    for f in .env .env.example; do
+        fails grep -q '^DATABASE_URL=' "$p/$f"
+        grep -qx 'PGHOST=postgres' "$p/$f"
+    done
+}
+
+env_reaches_the_container() {
+    "$NEW_PROJECT" fastapi envc
+    docker compose -f "$PROJECTS_DIR/envc/compose.yaml" config --format json \
+        | python3 -c 'import json,sys; assert json.load(sys.stdin)["services"]["dev"]["environment"]["APP_PORT"] == "3000"'
+}
+
+ide_vscode_adds_extensions_and_opens() {
+    PATH="$WORK/bin:$PATH" "$NEW_PROJECT" fastapi idevs --ide=vscode
+    local p="$PROJECTS_DIR/idevs"
+    python3 -m json.tool "$p/.devcontainer/devcontainer.json" > /dev/null
+    grep -q '"ms-python.python"' "$p/.devcontainer/devcontainer.json"
+    grep -q '"charliermarsh.ruff"' "$p/.devcontainer/devcontainer.json"
+    grep -qx "$p ." "$CODE_LOG"
+}
+
+ide_vscode_without_code_gives_hint() {
+    # A PATH with the tools new-project needs, but no `code`.
+    local bin tool
+    bin="$(mktemp -d "$WORK/nocode.XXXX")"
+    for tool in bash env git docker sed grep find sort cp mkdir dirname basename cat tail head \
+                mktemp rm sha256sum cut paste readlink mv tr touch chmod printf; do
+        if command -v "$tool" > /dev/null; then ln -sf "$(command -v "$tool")" "$bin/$tool"; fi
+    done
+    PATH="$bin" "$NEW_PROJECT" node idenocode --ide=vscode > "$WORK/nocode.out" 2>&1
+    [[ -f "$PROJECTS_DIR/idenocode/compose.yaml" ]]
+    grep -q "code \." "$WORK/nocode.out"
+}
+
+unsupported_ide_fails() {
+    fails "$NEW_PROJECT" node ideemacs --ide=emacs > "$WORK/emacs.out" 2>&1
+    grep -q "vscode" "$WORK/emacs.out"
+    [[ ! -e "$PROJECTS_DIR/ideemacs" ]]
+}
+
+options_in_any_order() {
+    make_repo "$WORK/src/order" "Gemfile=x"
+    "$NEW_PROJECT" rails order --with redis --from "$WORK/src/order"
+    [[ "$(git -C "$PROJECTS_DIR/order" log --format=%s)" == "init" ]]
+    [[ -f "$PROJECTS_DIR/order/compose.redis.yaml" ]]
+}
+
+requirements_only_fastapi_repo() {
+    make_repo "$WORK/src/reqs" "requirements.txt=fastapi==0.142.2" "requirements-dev.txt=pytest==9.1.1" "main.py=#"
+    "$NEW_PROJECT" fastapi reqs --from "$WORK/src/reqs"
+    local p="$PROJECTS_DIR/reqs" out
+    out="$(just_dry_run "$p" install)"
+    [[ "$out" == *"uv pip install -r requirements.txt"* ]]
+    [[ "$out" == *"uv pip install -r requirements-dev.txt"* ]]
+    [[ "$(just_dry_run "$p" lint)" == *"uvx ruff@0.16.10 check ."* ]]
+    fails grep -q "uv sync" "$p/justfile"
+}
+
+pyproject_fastapi_repo_keeps_uv_sync() {
+    make_repo "$WORK/src/pyp" "pyproject.toml=[project]" "requirements.txt=x" "main.py=#"
+    "$NEW_PROJECT" fastapi pyp --from "$WORK/src/pyp"
+    [[ "$(just_dry_run "$PROJECTS_DIR/pyp" install)" == "uv sync" ]]
+}
+
+lock_is_written() {
+    PATH="$WORK/bin:$PATH" "$NEW_PROJECT" node locked --with redis --ide=vscode
+    local lock="$PROJECTS_DIR/locked/.devcontainer/template.lock"
+    grep -qx "template node" "$lock"
+    grep -qx "name locked" "$lock"
+    grep -qx "services redis" "$lock"
+    grep -qx "ide vscode" "$lock"
+    grep -qE "^file [0-9a-f]{64} compose.yaml$" "$lock"
+    fails grep -q " src/app.js$" "$lock"
+}
+
+# --- dev update -------------------------------------------------------------
+# Each scenario gets its own sandbox, so changing its templates does not leak.
+
+update_replaces_untouched_files() {
+    local sb="$WORK/sb-untouched"; make_sandbox "$sb"
+    "$sb/scripts/new-project" node upd1
+    local p="$PROJECTS_DIR/upd1"
+    echo "# template fix" >> "$sb/templates/node/scaffold/compose.yaml"
+    (cd "$p" && "$sb/scripts/dev.real" update) > "$WORK/upd1.out"
+    grep -qx "# template fix" "$p/compose.yaml"
+    grep -q "compose.yaml" "$WORK/upd1.out"
+    grep -q "$(sha256sum "$p/compose.yaml" | cut -d' ' -f1) compose.yaml" "$p/.devcontainer/template.lock"
+}
+
+update_never_overwrites_edits() {
+    local sb="$WORK/sb-edits"; make_sandbox "$sb"
+    "$sb/scripts/new-project" node upd2
+    local p="$PROJECTS_DIR/upd2"
+    echo "mine:" >> "$p/justfile"
+    cp "$p/justfile" "$WORK/upd2-justfile"
+    echo "# template fix" >> "$sb/templates/node/scaffold/justfile"
+    (cd "$p" && "$sb/scripts/dev.real" update) > "$WORK/upd2.out"
+    cmp "$WORK/upd2-justfile" "$p/justfile"
+    grep -qx "# template fix" "$p/justfile.template-new"
+    grep -qi "conflict" "$WORK/upd2.out"
+    grep -q "justfile" "$WORK/upd2.out"
+}
+
+update_skips_edited_file_when_template_unchanged() {
+    local sb="$WORK/sb-same"; make_sandbox "$sb"
+    "$sb/scripts/new-project" node upd3
+    local p="$PROJECTS_DIR/upd3"
+    echo "mine:" >> "$p/justfile"
+    (cd "$p" && "$sb/scripts/dev.real" update) > "$WORK/upd3.out"
+    [[ ! -e "$p/justfile.template-new" ]]
+    grep -qi "up to date" "$WORK/upd3.out"
+}
+
+update_keeps_adopted_settings() {
+    local sb="$WORK/sb-adopt"; make_sandbox "$sb"
+    make_repo "$WORK/src/upd4" "Gemfile=x" ".ruby-version=3.3.6"
+    "$sb/scripts/new-project" rails upd4 --from "$WORK/src/upd4"
+    local p="$PROJECTS_DIR/upd4"
+    sed -i 's|"shutdownAction": "none",|"shutdownAction": "none",\n  "updateContentCommand": "true",|' \
+        "$sb/templates/rails/scaffold/.devcontainer/devcontainer.json"
+    (cd "$p" && "$sb/scripts/dev.real" update) > /dev/null
+    grep -q '"updateContentCommand"' "$p/.devcontainer/devcontainer.json"
+    [[ "$(feature_version "$p" '"\.\/ruby"')" == "3.3.6" ]]
+}
+
+update_adds_new_files_and_respects_deletions() {
+    local sb="$WORK/sb-files"; make_sandbox "$sb"
+    "$sb/scripts/new-project" node upd5
+    local p="$PROJECTS_DIR/upd5"
+    rm "$p/.gitignore"
+    echo "new" > "$sb/templates/node/scaffold/.editorconfig"
+    echo "# template fix" >> "$sb/templates/node/scaffold/.gitignore"
+    (cd "$p" && "$sb/scripts/dev.real" update) > /dev/null
+    [[ -f "$p/.editorconfig" ]]
+    [[ ! -e "$p/.gitignore" ]]
+}
+
+update_keeps_services_and_ide() {
+    local sb="$WORK/sb-svc"; make_sandbox "$sb"
+    PATH="$WORK/bin:$PATH" "$sb/scripts/new-project" node upd6 --with postgres --ide=vscode
+    local p="$PROJECTS_DIR/upd6"
+    echo "# template fix" >> "$sb/templates/node/scaffold/compose.yaml"
+    sed -i 's|"name": "{{PROJECT_NAME}}",|"name": "{{PROJECT_NAME}}",\n  "updateContentCommand": "true",|' \
+        "$sb/templates/node/scaffold/.devcontainer/devcontainer.json"
+    (cd "$p" && "$sb/scripts/dev.real" update) > /dev/null
+    grep -qx '  - compose.postgres.yaml' "$p/compose.yaml"
+    grep -qx "# template fix" "$p/compose.yaml"
+    grep -q '"updateContentCommand"' "$p/.devcontainer/devcontainer.json"
+    grep -q '"biomejs.biome"' "$p/.devcontainer/devcontainer.json"
+    python3 -m json.tool "$p/.devcontainer/devcontainer.json" > /dev/null
+}
+
+update_without_lock_explains() {
+    "$NEW_PROJECT" node upd7
+    local p="$PROJECTS_DIR/upd7"
+    rm "$p/.devcontainer/template.lock"
+    cp "$p/compose.yaml" "$WORK/upd7-compose"
+    fails bash -c "cd '$p' && '$SANDBOX/scripts/dev.real' update" > "$WORK/upd7.out" 2>&1
+    grep -q "template.lock" "$WORK/upd7.out"
+    cmp "$WORK/upd7-compose" "$p/compose.yaml"
+}
+
 usage_rejects_incomplete_from() {
     fails "$NEW_PROJECT" rails x --from > /dev/null 2>&1
     fails "$NEW_PROJECT" rails x --bogus y > /dev/null 2>&1
@@ -291,6 +498,25 @@ scenario "Spring Boot Maven repo gets a dev recipe" spring_boot_maven_repo_gets_
 scenario "Plain Maven repo: dev explains the main class" plain_maven_repo_dev_explains_main_class
 scenario "Maven repo with its own justfile keeps it" maven_repo_own_justfile_kept
 scenario "Gradle repo keeps the Gradle recipes" gradle_repo_keeps_gradle_recipes
+scenario "New project with postgres and redis" services_on_new_project
+scenario "Unknown service fails without creating anything" unknown_service_fails
+scenario "Adopted repo with --with keeps its .env.example" services_with_adopted_repo
+scenario "Rails project gets PGHOST but no DATABASE_URL" rails_project_gets_no_database_url
+scenario ".env variables reach the dev container" env_reaches_the_container
+scenario "--ide=vscode adds extensions and opens VS Code" ide_vscode_adds_extensions_and_opens
+scenario "--ide=vscode without code on PATH gives a hint" ide_vscode_without_code_gives_hint
+scenario "Unsupported IDE fails without creating anything" unsupported_ide_fails
+scenario "Options work in any order" options_in_any_order
+scenario "requirements.txt-only FastAPI repo gets pip recipes" requirements_only_fastapi_repo
+scenario "FastAPI repo with pyproject.toml keeps uv sync" pyproject_fastapi_repo_keeps_uv_sync
+scenario "Template lock is written" lock_is_written
+scenario "dev update replaces untouched files" update_replaces_untouched_files
+scenario "dev update never overwrites edits" update_never_overwrites_edits
+scenario "dev update skips edited file when template unchanged" update_skips_edited_file_when_template_unchanged
+scenario "dev update keeps adopted settings" update_keeps_adopted_settings
+scenario "dev update adds new files and respects deletions" update_adds_new_files_and_respects_deletions
+scenario "dev update keeps services and IDE settings" update_keeps_services_and_ide
+scenario "dev update without a lock explains and changes nothing" update_without_lock_explains
 
 echo
 echo "$PASSED passed, $FAILED failed"
