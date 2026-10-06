@@ -7,7 +7,9 @@
   "shutdownAction": "none",
   "features": {
     "./uv": {
+      // renovate: datasource=pypi depName=uv
       "version": "0.12.23",
+      // renovate: datasource=python-version depName=python
       "python": "3.14.8"
     }
   },

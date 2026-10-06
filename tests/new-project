@@ -67,6 +67,11 @@ make_repo() {
     git -C "$dir" -c user.name=test -c user.email=test@example.com commit -q -m init
 }
 
+# jsonc_valid <file>: strict JSON once // comment lines are dropped (devcontainer files are JSONC).
+jsonc_valid() {
+    sed '/^[[:space:]]*\/\//d' "$1" | python3 -m json.tool > /dev/null
+}
+
 feature_version() { # feature_version <project> <feature-key-fragment>
     sed -n "/$2/,/}/ s|.*\"version\": \"\([^\"]*\)\".*|\1|p" "$1/.devcontainer/devcontainer.json" | head -1
 }
@@ -231,7 +236,7 @@ env_reaches_the_container() {
 ide_vscode_adds_extensions_and_opens() {
     PATH="$WORK/bin:$PATH" "$NEW_PROJECT" fastapi idevs --ide=vscode
     local p="$PROJECTS_DIR/idevs"
-    python3 -m json.tool "$p/.devcontainer/devcontainer.json" > /dev/null
+    jsonc_valid "$p/.devcontainer/devcontainer.json"
     grep -q '"ms-python.python"' "$p/.devcontainer/devcontainer.json"
     grep -q '"charliermarsh.ruff"' "$p/.devcontainer/devcontainer.json"
     grep -qx "$p ." "$CODE_LOG"
@@ -453,7 +458,7 @@ update_keeps_services_and_ide() {
     grep -qx "# template fix" "$p/compose.yaml"
     grep -q '"updateContentCommand"' "$p/.devcontainer/devcontainer.json"
     grep -q '"biomejs.biome"' "$p/.devcontainer/devcontainer.json"
-    python3 -m json.tool "$p/.devcontainer/devcontainer.json" > /dev/null
+    jsonc_valid "$p/.devcontainer/devcontainer.json"
 }
 
 update_without_lock_explains() {

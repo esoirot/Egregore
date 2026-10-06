@@ -7,6 +7,7 @@
   "shutdownAction": "none",
   "features": {
     "ghcr.io/devcontainers/features/java:1": {
+      // renovate: datasource=java-version depName=java
       "version": "27.0.0-amzn",
       "jdkDistro": "amzn",
       "installGradle": true,

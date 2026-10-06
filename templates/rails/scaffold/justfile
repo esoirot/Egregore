@@ -3,6 +3,7 @@
 
 set dotenv-load
 
+# renovate: datasource=rubygems depName=rails
 rails_version := "8.1.4"
 
 # List recipes

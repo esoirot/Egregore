@@ -447,6 +447,8 @@ What it tracks:
 | Dev Containers CLI | `images/devcontainer-cli/Dockerfile` and its `image.env` tag |
 | GitHub Actions | `.github/workflows/images.yml` |
 
+Template pins outside built-in managers carry a `# renovate: datasource=… depName=…` comment (`//` in JSON files) read by one generic manager (see "Adding a New Template").
+
 Pins that must stay equal go in one PR (one group per runtime: `node`, `python`, `java`, `ruby`, `uv`, `pnpm`, …). Not tracked, on purpose: the `dev-base` image tag (bump it by hand when the base image changes), the Java major in the java `justfile` (`--java-version`), and apt packages (they follow the pinned base image).
 
 To bump a pin by hand, edit the `FROM` line or version in the relevant file, and bump `IMAGE` in `image.env` when an image changes; `CLAUDE.md` lists where each version lives.
@@ -483,6 +485,15 @@ Start from `templates/node/` and change:
 * optional `test`: given/when/then scenarios for `adopt` (and `env-skip`), sourced by `tests/new-project`; see `templates/java/test`.
 * `vscode-extensions`: one VS Code extension id per line, for `--ide=vscode`.
 * optional `env-skip`: service variables (from `services/*/env`) not to write into this template's projects (see `templates/rails/env-skip`).
+
+Pin every version, and let Renovate find each pin no built-in manager knows (feature options, versions in `install.sh` or the `justfile`) with a comment on the line just above it; the version must be the first number on that line. No change to `renovate.json`:
+
+```just
+# renovate: datasource=golang-version depName=go
+go_version := "1.27.1"
+```
+
+In `devcontainer.json` and `devcontainer-feature.json`, use `// renovate: …`. Optional fields after `depName`, in this order: `versioning=<v>` and `extractVersion=<regex>` (see `templates/rails/scaffold/.devcontainer/ruby/install.sh`). Check with the local dry run in `CLAUDE.md`.
 
 Placeholders replaced by `new-project` in the template files it copies (never in a repository's own files):
 
