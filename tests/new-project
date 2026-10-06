@@ -346,6 +346,16 @@ unsupported_ide_fails() {
     [[ ! -e "$PROJECTS_DIR/ideemacs" ]]
 }
 
+render_failure_creates_nothing() {
+    local sb="$WORK/sb-render"; make_sandbox "$sb"
+    rm "$sb/templates/node/vscode-extensions"
+    fails "$sb/scripts/new-project" node rfail --ide=vscode > /dev/null 2>&1
+    [[ ! -e "$PROJECTS_DIR/rfail" ]]
+    make_repo "$WORK/src/rfail" "package.json={}"
+    fails "$sb/scripts/new-project" node rfail --from "$WORK/src/rfail" --ide=vscode > /dev/null 2>&1
+    [[ ! -e "$PROJECTS_DIR/rfail" ]]
+}
+
 options_in_any_order() {
     make_repo "$WORK/src/order" "Gemfile=x"
     "$NEW_PROJECT" rails order --with redis --from "$WORK/src/order"
@@ -506,6 +516,7 @@ scenario ".env variables reach the dev container" env_reaches_the_container
 scenario "--ide=vscode adds extensions and opens VS Code" ide_vscode_adds_extensions_and_opens
 scenario "--ide=vscode without code on PATH gives a hint" ide_vscode_without_code_gives_hint
 scenario "Unsupported IDE fails without creating anything" unsupported_ide_fails
+scenario "Template render failure creates nothing" render_failure_creates_nothing
 scenario "Options work in any order" options_in_any_order
 scenario "requirements.txt-only FastAPI repo gets pip recipes" requirements_only_fastapi_repo
 scenario "FastAPI repo with pyproject.toml keeps uv sync" pyproject_fastapi_repo_keeps_uv_sync

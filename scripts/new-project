@@ -273,14 +273,7 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     exit 1
 fi
 
-if [[ -n "$FROM_REPO" ]]; then
-    git clone "$FROM_REPO" "$PROJECT_ROOT"
-else
-    mkdir -p "$PROJECT_ROOT"
-fi
-
-cd "$PROJECT_ROOT"
-
+# Render first: a broken template fails before anything is created.
 # starter/ (sample app, production stub, README) only goes into new projects,
 # never into an adopted repository.
 WITH_STARTER=yes
@@ -289,6 +282,14 @@ if [[ -n "$FROM_REPO" ]]; then WITH_STARTER=no; fi
 RENDER_DIR="$(mktemp -d)"
 trap 'rm -rf "$RENDER_DIR"' EXIT
 render "$TEMPLATE" "$PROJECT_NAME" "$SERVICES" "$IDE" "$WITH_STARTER" "$RENDER_DIR"
+
+if [[ -n "$FROM_REPO" ]]; then
+    git clone "$FROM_REPO" "$PROJECT_ROOT"
+else
+    mkdir -p "$PROJECT_ROOT"
+fi
+
+cd "$PROJECT_ROOT"
 
 # Copy rendered files the project does not have yet; existing files always win.
 ADDED=()
