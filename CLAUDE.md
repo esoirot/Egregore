@@ -62,6 +62,16 @@ tests/new-project && tests/dev
 
 ## Things to keep in sync
 
+Renovate (`renovate.json`; active once the file is on `main`, since Renovate reads the default branch, and the Renovate GitHub App is installed) opens weekly grouped PRs for every pin below. Built-in managers cover Dockerfiles (incl. `COPY --from`), compose files, `devcontainer.json` features and the node `version` option (the `devcontainer` manager's file pattern is widened: by default it only scans a root `.devcontainer/`), `package.json`, `pyproject.toml`, `.python-version` (pyenv) and Actions. Regex `customManagers` cover the rest, one manager per dependency: never pick a datasource with a template condition on `matchString` (not available there; everything silently fell back to the first branch, e.g. Gradle and pnpm looked up as Node). When adding or moving a pin, add or adjust a manager and check it with a local dry run (the local platform ignores the repo config, so pass it as global config):
+
+```bash
+docker run --rm -e LOG_LEVEL=debug -e LOG_FORMAT=json -e RENOVATE_CONFIG_FILE=/repo/renovate.json \
+  -v "$PWD:/repo" -w /repo ghcr.io/renovatebot/renovate:44 renovate --platform=local --dry-run=lookup
+docker run --rm -v "$PWD:/repo" -w /repo ghcr.io/renovatebot/renovate:44 renovate-config-validator renovate.json
+```
+
+In the JSON log, the `packageFiles with updates` message lists every detected dependency with its datasource. Not tracked on purpose: the `dev-base` tag, the java `--java-version` major, apt packages.
+
 - **Image tags** live only in each `images/*/image.env`. Tags are versioned; never `latest`. Bump the tag when the image changes.
 - **Image pins**: base image digests in `images/*/Dockerfile`; `@devcontainers/cli` version in its Dockerfile and its `image.env` tag.
 - **Service pins**: image tag + digest in `services/*/compose.yaml`.

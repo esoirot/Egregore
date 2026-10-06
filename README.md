@@ -117,6 +117,7 @@ dev-environment/
 ├── .github/workflows/
 │   └── images.yml             # CI: shellcheck, build + validate images, smoke-test templates
 │
+├── renovate.json              # Renovate: weekly PRs bumping every pinned version
 ├── .gitignore                 # keeps scaffold .env.example files tracked (!.env.example)
 ├── CLAUDE.md
 └── README.md
@@ -388,7 +389,7 @@ docker build -t my-poc .
 1. **Keep the Ubuntu host clean.** Only git and Docker on the host. Everything else belongs in containers.
 2. **Declare the stack in `devcontainer.json`.** No manual installs in running containers.
 3. **Keep the `just` contract.** `install`, `dev`, `test`, `lint`, `build` in every project.
-4. **Use versioned, pinned images.** Tags are versioned (never `latest`); base images are pinned by digest in the Dockerfiles.
+4. **Use versioned, pinned images.** Tags are versioned (never `latest`); base images are pinned by digest in the Dockerfiles. Renovate proposes the bumps; nothing updates silently.
 5. **Change shared environments here.** Edit `images/`, `templates/` or `services/` in this repository, not individual projects' copies; projects pick changes up with `dev update`.
 6. **Keep application config in the application repository.**
 
@@ -427,7 +428,29 @@ dev down && dev up
 
 The `adopt` hook runs again, so versions and build tools taken from the repository (`.ruby-version`, `pom.xml`, …) are kept. `starter/` files (the sample app) are yours after creation and never updated. Projects created before `template.lock` existed must be updated by hand.
 
-To bump a pinned version (base image digest, Dev Containers CLI, or a template's runtime and tools), edit the `FROM` line or version in the relevant `Dockerfile`, `devcontainer.json` or `justfile`, and bump `IMAGE` in `image.env` when an image changes. Some templates pin the same version in several files (for example the dev feature and the production `Dockerfile`); `CLAUDE.md` lists where.
+## Version updates (Renovate)
+
+Every version in this repository is pinned, and [Renovate](https://docs.renovatebot.com) keeps the pins current: once a week (Monday, before 6am) it opens a pull request per update, with release notes, labeled `dependencies`. Each PR runs CI, so an update that breaks a template fails before it is merged. Review and merge, or close to skip that version.
+
+**Status:** `renovate.json` is ready and checked (official validator, plus a local dry run that detects every pin below). Renovate reads its config from the default branch, so it starts once `renovate.json` is on `main` **and** the **Renovate GitHub App** is installed on the repository (`github.com/apps/renovate` → Install → select this repository). With the config already on `main` there is no onboarding PR: the first run directly opens the pending updates. Installed earlier, it would open an onboarding PR with default settings, missing the custom managers.
+
+What it tracks:
+
+| Pins | Where |
+| ---- | ----- |
+| Base images and digests | `FROM` lines in `images/*/Dockerfile` and the starter `Dockerfile`s (including `COPY --from=` uv) |
+| Service images and digests | `services/*/compose.yaml` |
+| Dev Container Features and Node | `devcontainer.json` (`features/*:<major>`, node `version`) |
+| pnpm, Gradle, JDK | `devcontainer.json` feature options |
+| Ruby, ruby-build, Rails | rails `devcontainer.json` + feature default, `install.sh` (`RUBY_BUILD_VERSION`), `justfile` (`rails_version`) |
+| uv, Python | fastapi `devcontainer.json` + feature defaults, `.python-version` |
+| npm and Python packages | starter `package.json` (Biome, pnpm), `pyproject.toml` (FastAPI, pytest, ruff, httpx2), `requirements.justfile` (ruff) |
+| Dev Containers CLI | `images/devcontainer-cli/Dockerfile` and its `image.env` tag |
+| GitHub Actions | `.github/workflows/images.yml` |
+
+Pins that must stay equal go in one PR (one group per runtime: `node`, `python`, `java`, `ruby`, `uv`, `pnpm`, …). Not tracked, on purpose: the `dev-base` image tag (bump it by hand when the base image changes), the Java major in the java `justfile` (`--java-version`), and apt packages (they follow the pinned base image).
+
+To bump a pin by hand, edit the `FROM` line or version in the relevant file, and bump `IMAGE` in `image.env` when an image changes; `CLAUDE.md` lists where each version lives.
 
 ---
 
