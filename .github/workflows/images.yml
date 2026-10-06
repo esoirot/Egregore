@@ -15,7 +15,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: shellcheck --severity=warning scripts/* tests/* images/*/validate images/*/entrypoint templates/*/adopt templates/*/scaffold/.devcontainer/*/install.sh
+      - run: shellcheck --severity=warning scripts/* tests/* images/*/validate images/*/entrypoint templates/*/adopt templates/*/test templates/*/scaffold/.devcontainer/*/install.sh
+      - name: Renovate annotations are readable
+        run: tests/renovate
 
   images:
     needs: shellcheck
@@ -57,6 +59,7 @@ jobs:
         run: |
           set -euo pipefail
           for dir in templates/*/; do
+            [[ -d "$dir/scaffold" ]] || continue  # templates/_shared is not a template
             name="$(basename "$dir")"
             scripts/new-project "$name" "ci-$name"
             # Stop it before the next template: they all publish port 3000.

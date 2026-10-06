@@ -6,11 +6,13 @@
   "options": {
     "version": {
       "type": "string",
+      // renovate: datasource=pypi depName=uv
       "default": "0.12.23",
       "description": "Exact uv version"
     },
     "python": {
       "type": "string",
+      // renovate: datasource=python-version depName=python
       "default": "3.14.8",
       "description": "Exact Python version installed by uv"
     }

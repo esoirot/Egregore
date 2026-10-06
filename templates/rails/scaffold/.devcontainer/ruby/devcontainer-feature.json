@@ -6,6 +6,7 @@
   "options": {
     "version": {
       "type": "string",
+      // renovate: datasource=ruby-version depName=ruby
       "default": "4.0.7",
       "description": "Exact Ruby version"
     }

@@ -3,6 +3,9 @@
 
 set dotenv-load
 
+# renovate: datasource=pypi depName=ruff
+ruff := "ruff@0.16.10"
+
 # List recipes
 default:
     @just --list
@@ -23,8 +26,8 @@ test *args:
 
 # Lint and check formatting (ruff runs from uvx, it does not need to be a dependency)
 lint:
-    uvx ruff@0.16.10 check .
-    uvx ruff@0.16.10 format --check .
+    uvx {{ruff}} check .
+    uvx {{ruff}} format --check .
 
 # Byte-compile the project
 build:

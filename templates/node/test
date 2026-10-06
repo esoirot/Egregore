@@ -1,0 +1,18 @@
+# shellcheck shell=bash
+# Scenarios for the node template: adopt (.nvmrc, .node-version).
+# Sourced by tests/new-project, which provides the helpers and variables.
+
+node_version_from_nvmrc() {
+    make_repo "$WORK/src/nvm" ".nvmrc=v24.11.0" "package.json={}"
+    "$NEW_PROJECT" node nvm --from "$WORK/src/nvm"
+    [[ "$(feature_version "$PROJECTS_DIR/nvm" 'features\/node')" == "24.11.0" ]]
+}
+
+node_version_from_node_version_file() {
+    make_repo "$WORK/src/nodev" ".node-version=22" "package.json={}"
+    "$NEW_PROJECT" node nodev --from "$WORK/src/nodev"
+    [[ "$(feature_version "$PROJECTS_DIR/nodev" 'features\/node')" == "22" ]]
+}
+
+scenario "Node version from .nvmrc" node_version_from_nvmrc
+scenario "Node version from .node-version" node_version_from_node_version_file

@@ -19,6 +19,16 @@
   "customManagers": [
     {
       "customType": "regex",
+      "description": "Template pins annotated on the line above: '# renovate: datasource=<ds> depName=<name> [versioning=<v>] [extractVersion=<re>]' ('//' in JSON files). The version is the first number on the next line not glued to a letter, digit or dot (\"3.14\" in '\"python3\": \"3.14\"'; v1.2 is not read). A new template needs no change here.",
+      "managerFilePatterns": [
+        "/(^|/)templates/.+/"
+      ],
+      "matchStrings": [
+        "(?:#|//)\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(?:\\s+versioning=(?<versioning>\\S+))?(?:\\s+extractVersion=(?<extractVersion>\\S+))?[ \\t]*\\n[^\\n]*?[^\\w.\\n](?<currentValue>\\d+(?:\\.\\d+)*)"
+      ]
+    },
+    {
+      "customType": "regex",
       "description": "pnpm version option of the node feature (the devcontainer manager already tracks Node itself)",
       "managerFilePatterns": [
         "/(^|/)\\.devcontainer/devcontainer\\.json$/"
@@ -40,98 +50,6 @@
       ],
       "datasourceTemplate": "gradle-version",
       "depNameTemplate": "gradle"
-    },
-    {
-      "customType": "regex",
-      "description": "JDK in the java template (SDKMAN id <version>-amzn; Corretto follows OpenJDK releases)",
-      "managerFilePatterns": [
-        "/(^|/)templates/java/scaffold/\\.devcontainer/devcontainer\\.json$/"
-      ],
-      "matchStrings": [
-        "\"version\"\\s*:\\s*\"(?<currentValue>[\\d.]+)-amzn\""
-      ],
-      "datasourceTemplate": "java-version",
-      "depNameTemplate": "java"
-    },
-    {
-      "customType": "regex",
-      "description": "Ruby: local ruby feature option and its default",
-      "managerFilePatterns": [
-        "/(^|/)templates/rails/scaffold/\\.devcontainer/devcontainer\\.json$/",
-        "/(^|/)templates/rails/scaffold/\\.devcontainer/ruby/devcontainer-feature\\.json$/"
-      ],
-      "matchStrings": [
-        "\"\\./ruby\"\\s*:\\s*\\{\\s*\"version\"\\s*:\\s*\"(?<currentValue>[\\d.]+)\"",
-        "\"default\"\\s*:\\s*\"(?<currentValue>[\\d.]+)\""
-      ],
-      "datasourceTemplate": "ruby-version",
-      "depNameTemplate": "ruby"
-    },
-    {
-      "customType": "regex",
-      "description": "ruby-build release used to compile Ruby (must know the Ruby version)",
-      "managerFilePatterns": [
-        "/(^|/)templates/rails/scaffold/\\.devcontainer/ruby/install\\.sh$/"
-      ],
-      "matchStrings": [
-        "RUBY_BUILD_VERSION=(?<currentValue>\\d+)"
-      ],
-      "datasourceTemplate": "github-tags",
-      "depNameTemplate": "rbenv/ruby-build",
-      "extractVersionTemplate": "^v(?<version>\\d+)$",
-      "versioningTemplate": "regex:^(?<major>\\d+)$"
-    },
-    {
-      "customType": "regex",
-      "description": "Rails version installed by just init",
-      "managerFilePatterns": [
-        "/(^|/)templates/rails/scaffold/justfile$/"
-      ],
-      "matchStrings": [
-        "rails_version := \"(?<currentValue>[\\d.]+)\""
-      ],
-      "datasourceTemplate": "rubygems",
-      "depNameTemplate": "rails"
-    },
-    {
-      "customType": "regex",
-      "description": "uv: local uv feature option and its default",
-      "managerFilePatterns": [
-        "/(^|/)templates/fastapi/scaffold/\\.devcontainer/devcontainer\\.json$/",
-        "/(^|/)templates/fastapi/scaffold/\\.devcontainer/uv/devcontainer-feature\\.json$/"
-      ],
-      "matchStrings": [
-        "\"version\"\\s*:\\s*\"(?<currentValue>0\\.[\\d.]+)\"",
-        "\"default\"\\s*:\\s*\"(?<currentValue>0\\.[\\d.]+)\""
-      ],
-      "datasourceTemplate": "pypi",
-      "depNameTemplate": "uv"
-    },
-    {
-      "customType": "regex",
-      "description": "Python: local uv feature option and its default (.python-version is covered by the pyenv manager)",
-      "managerFilePatterns": [
-        "/(^|/)templates/fastapi/scaffold/\\.devcontainer/devcontainer\\.json$/",
-        "/(^|/)templates/fastapi/scaffold/\\.devcontainer/uv/devcontainer-feature\\.json$/"
-      ],
-      "matchStrings": [
-        "\"python\"\\s*:\\s*\"(?<currentValue>3\\.[\\d.]+)\"",
-        "\"default\"\\s*:\\s*\"(?<currentValue>3\\.[\\d.]+)\""
-      ],
-      "datasourceTemplate": "python-version",
-      "depNameTemplate": "python"
-    },
-    {
-      "customType": "regex",
-      "description": "ruff run through uvx for requirements.txt projects",
-      "managerFilePatterns": [
-        "/(^|/)templates/fastapi/requirements\\.justfile$/"
-      ],
-      "matchStrings": [
-        "uvx ruff@(?<currentValue>[\\d.]+)"
-      ],
-      "datasourceTemplate": "pypi",
-      "depNameTemplate": "ruff"
     },
     {
       "customType": "regex",
@@ -159,32 +77,11 @@
   ],
   "packageRules": [
     {
-      "description": "One PR per runtime, across all the files that pin it (they must stay equal)",
-      "matchPackageNames": [
-        "node",
-        "pnpm",
-        "python",
-        "uv",
-        "ruby",
-        "java",
-        "gradle",
-        "ruff",
-        "@devcontainers/cli"
+      "description": "One PR per template: a template's pins (runtime, its images, tools) must stay in step, and CI tests the template as a whole. A new template gets its own group with no change here. Elsewhere, Renovate's default already puts every file pinning the same dependency in one PR.",
+      "matchFileNames": [
+        "templates/**"
       ],
-      "groupName": "{{packageName}}"
-    },
-    {
-      "description": "Docker images of the same runtime join their runtime group",
-      "matchDatasources": [
-        "docker"
-      ],
-      "matchPackageNames": [
-        "node",
-        "python",
-        "ghcr.io/astral-sh/uv",
-        "amazoncorretto"
-      ],
-      "groupName": "{{#if (equals packageName 'ghcr.io/astral-sh/uv')}}uv{{else}}{{#if (equals packageName 'amazoncorretto')}}java{{else}}{{packageName}}{{/if}}{{/if}}"
+      "groupName": "{{lookup (split packageFile '/') 1}} template"
     },
     {
       "description": "Template placeholders are not images",

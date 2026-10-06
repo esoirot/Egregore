@@ -2,6 +2,7 @@
 # Runs as root during the dev container build. VERSION comes from the feature option.
 set -euo pipefail
 
+# renovate: datasource=github-tags depName=rbenv/ruby-build versioning=regex:^(?<major>\d+)$ extractVersion=^v(?<version>\d+)$
 RUBY_BUILD_VERSION=20260924
 
 # tzdata: Rails (tzinfo) needs zoneinfo to boot. libpq-dev: builds the pg gem (--with postgres).

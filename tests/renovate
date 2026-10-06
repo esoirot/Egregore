@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Checks the generic Renovate manager in renovate.json without running Renovate:
+# what it reads from '# renovate:' comments ('//' in JSON files), on sample lines
+# and on every such comment under templates/.
+# Usage: tests/renovate
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
+git ls-files templates | python3 -c '
+import json, re, sys
+
+config = json.load(open("renovate.json"))
+[manager] = [m for m in config["customManagers"] if "renovate:" in m["matchStrings"][0]]
+# Renovate regexes name groups (?<name>...); Python spells them (?P<name>...).
+pattern = re.compile(manager["matchStrings"][0].replace("(?<", "(?P<"))
+
+def read(text, pos=0):
+    m = pattern.match(text, pos)
+    return m.groupdict() if m else None
+
+failed = 0
+def check(name, ok, detail=""):
+    global failed
+    print(("✓ " if ok else "✗ ") + name + ("" if ok else "\n    " + detail))
+    failed += not ok
+
+# Given a comment and the line below it, then the version read is:
+samples = [
+    ("// renovate: datasource=python-version depName=python\n  \"python3\": \"3.14\",", "3.14"),
+    ("// renovate: datasource=java-version depName=java\n  \"version\": \"27.0.0-amzn\",", "27.0.0"),
+    ("# renovate: datasource=pypi depName=ruff\nruff := \"ruff@0.16.10\"", "0.16.10"),
+    ("# renovate: datasource=github-tags depName=rbenv/ruby-build\nRUBY_BUILD_VERSION=20260924", "20260924"),
+    ("# renovate: datasource=docker depName=x\nversion: v1.2", None),
+    ("# renovate: datasource=pypi depName=x\n\nx := \"1.0\"", None),
+]
+for text, want in samples:
+    got = read(text)
+    got = got and got["currentValue"]
+    check("reads %s from %r" % (want or "nothing", text.split("\n", 1)[1]), got == want, "read %r" % got)
+
+got = read("# renovate: datasource=github-tags depName=a/b versioning=loose extractVersion=^v(?<version>.+)$\nA=1")
+check("reads versioning and extractVersion",
+      got is not None and (got["versioning"], got["extractVersion"]) == ("loose", "^v(?<version>.+)$"), "read %r" % got)
+
+# Given every annotated pin under templates/, then each one is read, from the line just below.
+comment = re.compile(r"^[ \t]*((?:#|//)\s*renovate:)", re.M)
+count = 0
+for path in sys.stdin.read().split():
+    try:
+        text = open(path).read()
+    except UnicodeDecodeError:
+        continue
+    for c in comment.finditer(text):
+        count += 1
+        line = text.count("\n", 0, c.start()) + 1
+        got = read(text, c.start(1))
+        below = text[c.start():].split("\n")[1]
+        check("%s:%d %s" % (path, line, got and got["depName"]),
+              got is not None and got["currentValue"] in below,
+              "no version read from the line below (it must not be glued to a letter, e.g. v1.2)")
+check("finds annotated pins under templates/", count > 0, "none found")
+
+print("\n%s" % ("all passed" if not failed else "%d failed" % failed))
+sys.exit(failed > 0)
+'

@@ -41,6 +41,16 @@ mkdir -p "$PROJECTS_DIR"
 
 source "$SANDBOX/images/base/image.env"
 BASE_IMAGE="$IMAGE"
+source "$SANDBOX/images/devcontainer-cli/image.env"
+CLI_IMAGE="$IMAGE"
+
+# template_names: every template of the sandbox (a directory with a scaffold/).
+template_names() {
+    local d
+    for d in "$SANDBOX"/templates/*/; do
+        if [[ -d "$d/scaffold" ]]; then basename "$d"; fi
+    done
+}
 
 # make_repo <dir> <path>=<content>... : a committed git repo with the given files.
 make_repo() {
@@ -55,6 +65,11 @@ make_repo() {
     done
     git -C "$dir" add -A
     git -C "$dir" -c user.name=test -c user.email=test@example.com commit -q -m init
+}
+
+# jsonc_valid <file>: strict JSON once // comment lines are dropped (devcontainer files are JSONC).
+jsonc_valid() {
+    sed '/^[[:space:]]*\/\//d' "$1" | python3 -m json.tool > /dev/null
 }
 
 feature_version() { # feature_version <project> <feature-key-fragment>
@@ -82,17 +97,6 @@ scenario() {
     fi
 }
 
-adopt_rails_repo() {
-    make_repo "$WORK/src/rails-app" "Gemfile=source 'https://rubygems.org'" ".ruby-version=3.3.6"
-    "$NEW_PROJECT" rails rails-app --from "$WORK/src/rails-app"
-    local p="$PROJECTS_DIR/rails-app"
-    [[ "$(git -C "$p" log --format=%s)" == "init" ]]
-    [[ -f "$p/.devcontainer/devcontainer.json" && -f "$p/compose.yaml" && -f "$p/justfile" ]]
-    [[ -x "$p/.devcontainer/ruby/install.sh" ]]
-    [[ "$(feature_version "$p" '"\.\/ruby"')" == "3.3.6" ]]
-    grep -qx "$p up" "$DEV_LOG"
-}
-
 repo_files_never_overwritten() {
     make_repo "$WORK/src/keep" "README.md=# Mine" ".gitignore=my-ignore" "justfile=mine:" "Gemfile=x"
     "$NEW_PROJECT" rails keep --from "$WORK/src/keep"
@@ -111,16 +115,6 @@ placeholders_in_repo_code_untouched() {
     grep -q "image: $BASE_IMAGE" "$p/compose.yaml"
 }
 
-java_init_never_clobbers_maven() {
-    make_repo "$WORK/src/mvn" "pom.xml=<project/>"
-    "$NEW_PROJECT" java mvn --from "$WORK/src/mvn"
-    local p="$PROJECTS_DIR/mvn"
-    # The base image has no gradle: if the guard let `gradle init` run, this fails.
-    docker run --rm -v "$p:/workspace" "$BASE_IMAGE" just init
-    [[ "$(cat "$p/pom.xml")" == "<project/>" ]]
-    [[ ! -e "$p/settings.gradle.kts" ]]
-}
-
 app_port_with_repo_env_example() {
     make_repo "$WORK/src/envx" ".env.example=FOO=bar" "Gemfile=x"
     APP_PORT=3100 "$NEW_PROJECT" rails envx --from "$WORK/src/envx"
@@ -132,33 +126,6 @@ app_port_defaults_when_repo_example_lacks_it() {
     make_repo "$WORK/src/envd" ".env.example=FOO=bar" "Gemfile=x"
     "$NEW_PROJECT" rails envd --from "$WORK/src/envd"
     grep -qx "APP_PORT=3000" "$PROJECTS_DIR/envd/.env"
-}
-
-no_version_file_keeps_template_pin() {
-    make_repo "$WORK/src/nover" "Gemfile=x"
-    "$NEW_PROJECT" rails nover --from "$WORK/src/nover"
-    [[ "$(feature_version "$PROJECTS_DIR/nover" '"\.\/ruby"')" == \
-       "$(feature_version "$SANDBOX/templates/rails/scaffold" '"\.\/ruby"')" ]]
-}
-
-node_version_from_nvmrc() {
-    make_repo "$WORK/src/nvm" ".nvmrc=v24.11.0" "package.json={}"
-    "$NEW_PROJECT" node nvm --from "$WORK/src/nvm"
-    [[ "$(feature_version "$PROJECTS_DIR/nvm" 'features\/node')" == "24.11.0" ]]
-}
-
-node_version_from_node_version_file() {
-    make_repo "$WORK/src/nodev" ".node-version=22" "package.json={}"
-    "$NEW_PROJECT" node nodev --from "$WORK/src/nodev"
-    [[ "$(feature_version "$PROJECTS_DIR/nodev" 'features\/node')" == "22" ]]
-}
-
-java_version_from_sdkmanrc() {
-    make_repo "$WORK/src/sdk" ".sdkmanrc=java=21.0.5-tem" "pom.xml=<project/>"
-    "$NEW_PROJECT" java sdk --from "$WORK/src/sdk"
-    local json="$PROJECTS_DIR/sdk/.devcontainer/devcontainer.json"
-    grep -q '"version": "21.0.5-tem"' "$json"
-    grep -q '"jdkDistro": "tem"' "$json"
 }
 
 repo_devcontainer_is_kept_and_reported() {
@@ -205,49 +172,6 @@ plain_new_project_unchanged() {
 # just prints it on stderr; `*args` recipes render with a trailing space.
 just_dry_run() {
     docker run --rm -v "$1:/workspace" "$BASE_IMAGE" just --dry-run "$2" 2>&1 | sed 's/[[:space:]]*$//'
-}
-
-maven_repo_with_wrapper_uses_mvnw() {
-    make_repo "$WORK/src/mvnw" "pom.xml=<project/>" "mvnw=#!/bin/sh"
-    "$NEW_PROJECT" java mvnw --from "$WORK/src/mvnw"
-    local p="$PROJECTS_DIR/mvnw"
-    [[ "$(just_dry_run "$p" test)" == "./mvnw test" ]]
-    [[ "$(just_dry_run "$p" build)" == "./mvnw package" ]]
-    fails grep -q '"installMaven"' "$p/.devcontainer/devcontainer.json"
-}
-
-maven_repo_without_wrapper_installs_maven() {
-    make_repo "$WORK/src/mvn2" "pom.xml=<project/>"
-    "$NEW_PROJECT" java mvn2 --from "$WORK/src/mvn2"
-    local p="$PROJECTS_DIR/mvn2"
-    [[ "$(just_dry_run "$p" test)" == "mvn test" ]]
-    grep -q '"installMaven": true' "$p/.devcontainer/devcontainer.json"
-}
-
-spring_boot_maven_repo_gets_dev_recipe() {
-    make_repo "$WORK/src/boot" "pom.xml=<plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin>" "mvnw=#!/bin/sh"
-    "$NEW_PROJECT" java boot --from "$WORK/src/boot"
-    [[ "$(just_dry_run "$PROJECTS_DIR/boot" dev)" == "./mvnw spring-boot:run" ]]
-}
-
-plain_maven_repo_dev_explains_main_class() {
-    make_repo "$WORK/src/plainmvn" "pom.xml=<project/>" "mvnw=#!/bin/sh"
-    "$NEW_PROJECT" java plainmvn --from "$WORK/src/plainmvn"
-    local out
-    out="$(docker run --rm -v "$PROJECTS_DIR/plainmvn:/workspace" "$BASE_IMAGE" just dev 2>&1)" && return 1
-    [[ "$out" == *"main class"* ]]
-}
-
-maven_repo_own_justfile_kept() {
-    make_repo "$WORK/src/mvnjf" "pom.xml=<project/>" "justfile=mine:"
-    "$NEW_PROJECT" java mvnjf --from "$WORK/src/mvnjf"
-    cmp "$WORK/src/mvnjf/justfile" "$PROJECTS_DIR/mvnjf/justfile"
-}
-
-gradle_repo_keeps_gradle_recipes() {
-    make_repo "$WORK/src/grd" "settings.gradle.kts=rootProject.name = \"grd\""
-    "$NEW_PROJECT" java grd --from "$WORK/src/grd"
-    [[ "$(just_dry_run "$PROJECTS_DIR/grd" test)" == "./gradlew test" ]]
 }
 
 adopted_repo_gets_no_sample_app() {
@@ -303,15 +227,6 @@ services_with_adopted_repo() {
     grep -qx '  - compose.postgres.yaml' "$p/compose.yaml"
 }
 
-rails_project_gets_no_database_url() {
-    "$NEW_PROJECT" rails railsdb --with postgres
-    local p="$PROJECTS_DIR/railsdb" f
-    for f in .env .env.example; do
-        fails grep -q '^DATABASE_URL=' "$p/$f"
-        grep -qx 'PGHOST=postgres' "$p/$f"
-    done
-}
-
 env_reaches_the_container() {
     "$NEW_PROJECT" fastapi envc
     docker compose -f "$PROJECTS_DIR/envc/compose.yaml" config --format json \
@@ -321,7 +236,7 @@ env_reaches_the_container() {
 ide_vscode_adds_extensions_and_opens() {
     PATH="$WORK/bin:$PATH" "$NEW_PROJECT" fastapi idevs --ide=vscode
     local p="$PROJECTS_DIR/idevs"
-    python3 -m json.tool "$p/.devcontainer/devcontainer.json" > /dev/null
+    jsonc_valid "$p/.devcontainer/devcontainer.json"
     grep -q '"ms-python.python"' "$p/.devcontainer/devcontainer.json"
     grep -q '"charliermarsh.ruff"' "$p/.devcontainer/devcontainer.json"
     grep -qx "$p ." "$CODE_LOG"
@@ -346,28 +261,21 @@ unsupported_ide_fails() {
     [[ ! -e "$PROJECTS_DIR/ideemacs" ]]
 }
 
+render_failure_creates_nothing() {
+    local sb="$WORK/sb-render"; make_sandbox "$sb"
+    rm "$sb/templates/node/vscode-extensions"
+    fails "$sb/scripts/new-project" node rfail --ide=vscode > /dev/null 2>&1
+    [[ ! -e "$PROJECTS_DIR/rfail" ]]
+    make_repo "$WORK/src/rfail" "package.json={}"
+    fails "$sb/scripts/new-project" node rfail --from "$WORK/src/rfail" --ide=vscode > /dev/null 2>&1
+    [[ ! -e "$PROJECTS_DIR/rfail" ]]
+}
+
 options_in_any_order() {
     make_repo "$WORK/src/order" "Gemfile=x"
     "$NEW_PROJECT" rails order --with redis --from "$WORK/src/order"
     [[ "$(git -C "$PROJECTS_DIR/order" log --format=%s)" == "init" ]]
     [[ -f "$PROJECTS_DIR/order/compose.redis.yaml" ]]
-}
-
-requirements_only_fastapi_repo() {
-    make_repo "$WORK/src/reqs" "requirements.txt=fastapi==0.142.2" "requirements-dev.txt=pytest==9.1.1" "main.py=#"
-    "$NEW_PROJECT" fastapi reqs --from "$WORK/src/reqs"
-    local p="$PROJECTS_DIR/reqs" out
-    out="$(just_dry_run "$p" install)"
-    [[ "$out" == *"uv pip install -r requirements.txt"* ]]
-    [[ "$out" == *"uv pip install -r requirements-dev.txt"* ]]
-    [[ "$(just_dry_run "$p" lint)" == *"uvx ruff@0.16.10 check ."* ]]
-    fails grep -q "uv sync" "$p/justfile"
-}
-
-pyproject_fastapi_repo_keeps_uv_sync() {
-    make_repo "$WORK/src/pyp" "pyproject.toml=[project]" "requirements.txt=x" "main.py=#"
-    "$NEW_PROJECT" fastapi pyp --from "$WORK/src/pyp"
-    [[ "$(just_dry_run "$PROJECTS_DIR/pyp" install)" == "uv sync" ]]
 }
 
 lock_is_written() {
@@ -381,6 +289,101 @@ lock_is_written() {
     fails grep -q " src/app.js$" "$lock"
 }
 
+# --- template contract --------------------------------------------------------
+
+# read_configuration <project>: the configuration the Dev Containers CLI resolves (JSON).
+read_configuration() {
+    docker run --rm --user "$(id -u):$(id -g)" --group-add "$(stat -c %g /var/run/docker.sock)" -e HOME=/tmp \
+        -v /var/run/docker.sock:/var/run/docker.sock -v "$1:$1" -w "$1" \
+        "$CLI_IMAGE" read-configuration --workspace-folder "$1" 2>/dev/null
+}
+
+# check_contract <sandbox> <template>: projects made from the template (with and without
+# --ide=vscode) keep the team contract. Prints the broken rule on failure.
+check_contract() {
+    local sb="$1" t="$2" dir="$1/templates/$2" ide p recipes r
+    [[ -s "$dir/vscode-extensions" ]] || { echo "$t: vscode-extensions missing or empty"; return 1; }
+    if [[ -e "$dir/adopt" && ! -x "$dir/adopt" ]]; then echo "$t: adopt is not executable"; return 1; fi
+    for ide in "" vscode; do
+        p="$PROJECTS_DIR/${sb##*/}-$t${ide:+-$ide}"
+        PATH="$WORK/bin:$PATH" "$sb/scripts/new-project" "$t" "${p##*/}" ${ide:+"--ide=$ide"} > /dev/null \
+            || { echo "$t: new-project failed"; return 1; }
+        read_configuration "$p" | python3 -c 'import json, sys
+c = json.load(sys.stdin)["configuration"]
+assert (c.get("service"), c.get("remoteUser"), c.get("workspaceFolder")) == ("dev", "dev", "/workspace")
+if sys.argv[1]:
+    assert c["customizations"]["vscode"]["extensions"] == open(sys.argv[2]).read().split()' "$ide" "$dir/vscode-extensions" \
+            || { echo "$t${ide:+ --ide=$ide}: devcontainer.json does not resolve to service dev, remoteUser dev, /workspace${ide:+ and vscode-extensions}"; return 1; }
+    done
+    docker compose -f "$p/compose.yaml" config --format json | python3 -c 'import json, sys
+dev = json.load(sys.stdin)["services"]["dev"]
+assert dev["image"] == sys.argv[1] and "APP_PORT" in dev.get("environment", {})' "$BASE_IMAGE" \
+        || { echo "$t: compose service dev must use the base image and load .env (env_file)"; return 1; }
+    head -1 "$p/justfile" | grep -q '^# Team command contract' \
+        || { echo "$t: justfile lacks the '# Team command contract' header (adopt variants rely on it)"; return 1; }
+    recipes=" $(docker run --rm -v "$p:/workspace" "$BASE_IMAGE" just --summary) "
+    for r in install dev test lint build; do
+        [[ "$recipes" == *" $r "* ]] || { echo "$t: justfile lacks recipe $r"; return 1; }
+    done
+}
+
+contract_check_catches_missing_recipe() {
+    local sb="$WORK/sb-norecipe"; make_sandbox "$sb"
+    sed -i 's/^test \*args:/check *args:/' "$sb/templates/node/scaffold/justfile"
+    check_contract "$sb" node > "$WORK/norecipe.out" && return 1
+    grep -q "node: justfile lacks recipe test" "$WORK/norecipe.out"
+}
+
+contract_check_catches_trailing_blank_line() {
+    local sb="$WORK/sb-blank"; make_sandbox "$sb"
+    echo >> "$sb/templates/node/scaffold/.devcontainer/devcontainer.json"
+    check_contract "$sb" node > "$WORK/blank.out" && return 1
+    grep -q "node --ide=vscode: devcontainer.json" "$WORK/blank.out"
+}
+
+# --- shared scaffold (templates/_shared) -----------------------------------
+
+shared_files_reach_every_template() {
+    local t f
+    for t in $(template_names); do
+        "$NEW_PROJECT" "$t" "shared-$t"
+        for f in compose.yaml .env.example; do
+            [[ "$(cat "$PROJECTS_DIR/shared-$t/$f")" == \
+               "$(sed -e "s|{{PROJECT_NAME}}|shared-$t|g" -e "s|{{IMAGE}}|$BASE_IMAGE|g" "$SANDBOX/templates/_shared/$f")" ]] \
+                || { echo "$t: $f differs from templates/_shared/$f"; return 1; }
+        done
+    done
+}
+
+template_file_wins_over_shared() {
+    local sb="$WORK/sb-override"; make_sandbox "$sb"
+    printf 'name: {{PROJECT_NAME}}\n# node only\n' > "$sb/templates/node/scaffold/compose.yaml"
+    "$sb/scripts/new-project" node ovr
+    grep -qx "# node only" "$PROJECTS_DIR/ovr/compose.yaml"
+    "$sb/scripts/new-project" fastapi ovr2
+    fails grep -q "# node only" "$PROJECTS_DIR/ovr2/compose.yaml"
+}
+
+shared_is_not_a_template() {
+    fails "$NEW_PROJECT" _shared shr > "$WORK/shr.out" 2>&1
+    [[ ! -e "$PROJECTS_DIR/shr" ]]
+    fails "$NEW_PROJECT" > "$WORK/usage.out" 2>&1
+    grep -qx "  node" "$WORK/usage.out"
+    fails grep -q "_shared" "$WORK/usage.out"
+}
+
+update_brings_shared_fix_to_every_template() {
+    local sb="$WORK/sb-shared"; make_sandbox "$sb"
+    "$sb/scripts/new-project" node shu1
+    "$sb/scripts/new-project" rails shu2
+    echo "# shared fix" >> "$sb/templates/_shared/compose.yaml"
+    local p
+    for p in shu1 shu2; do
+        (cd "$PROJECTS_DIR/$p" && "$sb/scripts/dev.real" update) > /dev/null
+        grep -qx "# shared fix" "$PROJECTS_DIR/$p/compose.yaml"
+    done
+}
+
 # --- dev update -------------------------------------------------------------
 # Each scenario gets its own sandbox, so changing its templates does not leak.
 
@@ -388,7 +391,7 @@ update_replaces_untouched_files() {
     local sb="$WORK/sb-untouched"; make_sandbox "$sb"
     "$sb/scripts/new-project" node upd1
     local p="$PROJECTS_DIR/upd1"
-    echo "# template fix" >> "$sb/templates/node/scaffold/compose.yaml"
+    echo "# template fix" >> "$sb/templates/_shared/compose.yaml"
     (cd "$p" && "$sb/scripts/dev.real" update) > "$WORK/upd1.out"
     grep -qx "# template fix" "$p/compose.yaml"
     grep -q "compose.yaml" "$WORK/upd1.out"
@@ -447,7 +450,7 @@ update_keeps_services_and_ide() {
     local sb="$WORK/sb-svc"; make_sandbox "$sb"
     PATH="$WORK/bin:$PATH" "$sb/scripts/new-project" node upd6 --with postgres --ide=vscode
     local p="$PROJECTS_DIR/upd6"
-    echo "# template fix" >> "$sb/templates/node/scaffold/compose.yaml"
+    echo "# template fix" >> "$sb/templates/_shared/compose.yaml"
     sed -i 's|"name": "{{PROJECT_NAME}}",|"name": "{{PROJECT_NAME}}",\n  "updateContentCommand": "true",|' \
         "$sb/templates/node/scaffold/.devcontainer/devcontainer.json"
     (cd "$p" && "$sb/scripts/dev.real" update) > /dev/null
@@ -455,7 +458,7 @@ update_keeps_services_and_ide() {
     grep -qx "# template fix" "$p/compose.yaml"
     grep -q '"updateContentCommand"' "$p/.devcontainer/devcontainer.json"
     grep -q '"biomejs.biome"' "$p/.devcontainer/devcontainer.json"
-    python3 -m json.tool "$p/.devcontainer/devcontainer.json" > /dev/null
+    jsonc_valid "$p/.devcontainer/devcontainer.json"
 }
 
 update_without_lock_explains() {
@@ -474,16 +477,10 @@ usage_rejects_incomplete_from() {
     [[ ! -e "$PROJECTS_DIR/x" ]]
 }
 
-scenario "Adopt a Rails repo" adopt_rails_repo
 scenario "Repo files are never overwritten" repo_files_never_overwritten
 scenario "Placeholders in repo code are untouched" placeholders_in_repo_code_untouched
-scenario "Java generator never clobbers an existing Maven build" java_init_never_clobbers_maven
 scenario "APP_PORT is honored with the repo's own .env.example" app_port_with_repo_env_example
 scenario "APP_PORT defaults to 3000 when the repo's example lacks it" app_port_defaults_when_repo_example_lacks_it
-scenario "No version file keeps the template pin" no_version_file_keeps_template_pin
-scenario "Node version from .nvmrc" node_version_from_nvmrc
-scenario "Node version from .node-version" node_version_from_node_version_file
-scenario "Java version from .sdkmanrc" java_version_from_sdkmanrc
 scenario "Repo's own devcontainer.json is kept and reported" repo_devcontainer_is_kept_and_reported
 scenario "Added files are listed and stay untracked" added_files_are_listed
 scenario "Existing target folder fails without cloning" existing_target_fails_without_cloning
@@ -492,24 +489,25 @@ scenario "Plain new-project unchanged" plain_new_project_unchanged
 scenario "Incomplete or unknown options are rejected" usage_rejects_incomplete_from
 scenario "Adopted repo gets no sample app or production stub" adopted_repo_gets_no_sample_app
 scenario "New project gets the starter app" new_fastapi_project_gets_starter
-scenario "Maven repo with wrapper uses ./mvnw" maven_repo_with_wrapper_uses_mvnw
-scenario "Maven repo without wrapper installs Maven" maven_repo_without_wrapper_installs_maven
-scenario "Spring Boot Maven repo gets a dev recipe" spring_boot_maven_repo_gets_dev_recipe
-scenario "Plain Maven repo: dev explains the main class" plain_maven_repo_dev_explains_main_class
-scenario "Maven repo with its own justfile keeps it" maven_repo_own_justfile_kept
-scenario "Gradle repo keeps the Gradle recipes" gradle_repo_keeps_gradle_recipes
 scenario "New project with postgres and redis" services_on_new_project
 scenario "Unknown service fails without creating anything" unknown_service_fails
 scenario "Adopted repo with --with keeps its .env.example" services_with_adopted_repo
-scenario "Rails project gets PGHOST but no DATABASE_URL" rails_project_gets_no_database_url
 scenario ".env variables reach the dev container" env_reaches_the_container
 scenario "--ide=vscode adds extensions and opens VS Code" ide_vscode_adds_extensions_and_opens
 scenario "--ide=vscode without code on PATH gives a hint" ide_vscode_without_code_gives_hint
 scenario "Unsupported IDE fails without creating anything" unsupported_ide_fails
+scenario "Template render failure creates nothing" render_failure_creates_nothing
 scenario "Options work in any order" options_in_any_order
-scenario "requirements.txt-only FastAPI repo gets pip recipes" requirements_only_fastapi_repo
-scenario "FastAPI repo with pyproject.toml keeps uv sync" pyproject_fastapi_repo_keeps_uv_sync
 scenario "Template lock is written" lock_is_written
+for t in $(template_names); do
+    scenario "Template $t keeps the contract" check_contract "$SANDBOX" "$t"
+done
+scenario "Contract check catches a missing recipe" contract_check_catches_missing_recipe
+scenario "Contract check catches a trailing blank line in devcontainer.json" contract_check_catches_trailing_blank_line
+scenario "Shared scaffold files reach every template" shared_files_reach_every_template
+scenario "A template's own file wins over the shared one" template_file_wins_over_shared
+scenario "_shared is not a template" shared_is_not_a_template
+scenario "dev update brings a shared fix to every template" update_brings_shared_fix_to_every_template
 scenario "dev update replaces untouched files" update_replaces_untouched_files
 scenario "dev update never overwrites edits" update_never_overwrites_edits
 scenario "dev update skips edited file when template unchanged" update_skips_edited_file_when_template_unchanged
@@ -517,6 +515,17 @@ scenario "dev update keeps adopted settings" update_keeps_adopted_settings
 scenario "dev update adds new files and respects deletions" update_adds_new_files_and_respects_deletions
 scenario "dev update keeps services and IDE settings" update_keeps_services_and_ide
 scenario "dev update without a lock explains and changes nothing" update_without_lock_explains
+
+# Each template's own scenarios (adopt, env-skip), kept next to it in templates/<name>/test.
+for f in "$SANDBOX"/templates/*/test; do
+    if [[ ! -f "$f" ]]; then continue; fi
+    ran=$((PASSED + FAILED))
+    # shellcheck source=/dev/null  # checked on its own in CI
+    source "$f"
+    if [[ $((PASSED + FAILED)) -eq $ran ]]; then
+        FAILED=$((FAILED + 1)); echo "✗ ${f#"$SANDBOX"/} runs no scenario (missing scenario lines?)"
+    fi
+done
 
 echo
 echo "$PASSED passed, $FAILED failed"
