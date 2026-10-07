@@ -17,7 +17,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0  # check-image-tags compares with the base commit
-      - run: shellcheck --severity=warning scripts/* tests/* images/*/validate images/*/entrypoint templates/*/adopt templates/*/test templates/*/scaffold/.devcontainer/*/install.sh
+      # Every shell script in templates/, found by its shebang or shellcheck directive.
+      - run: shellcheck --severity=warning scripts/* tests/* images/*/validate images/*/entrypoint $(grep -rlE '^#!/(usr/)?bin/(env )?(ba)?sh|^# shellcheck shell=' templates)
       - name: Renovate annotations are readable
         run: tests/renovate
       - name: Changed images have a new tag

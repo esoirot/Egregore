@@ -17,7 +17,11 @@ services = {n: s for n, s in json.load(sys.stdin)["services"].items() if n != "d
 assert services, "no data space services"
 for name, s in services.items():
     where = "service " + name + ": "
-    assert "healthcheck" in s, where + "needs a healthcheck (readiness probe)"
+    job = s.get("labels", {}).get("eonax.role") == "job"
+    if job:
+        assert s.get("restart", "no") == "no", where + "a job runs once (restart: no), like a Kubernetes Job"
+    else:
+        assert "healthcheck" in s, where + "needs a healthcheck (readiness probe), or label eonax.role: job"
     assert "network_mode" not in s, where + "network_mode does not exist in Kubernetes"
     for v in s.get("volumes", []):
         assert v["type"] != "bind" or v["source"].startswith(project + "/"), where + "binds a host path: " + v["source"]

@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Consumer: ask the provider's connector what it offers (Dataspace Protocol catalog request).
+# The consumer calls its OWN management API; its connector talks to the provider's connector.
+# Each dataset comes with offers (odrl:hasPolicy): the contract a consumer can ask for.
+set -euo pipefail
+source "$(dirname "$0")/lib.sh"
+
+management consumer POST /v3/catalog/request "$(cat "$REQUESTS/catalog-request.json")" > "$STATE/catalog.json"
+
+# One dataset is an object, several are an array: normalize to an array.
+jq -r '[.["dataset"] // .["dcat:dataset"]] | flatten | .[] | "dataset \(.["@id"]): \(.name // .["edc:name"] // "")"' "$STATE/catalog.json"
+offer="$(jq -r --arg a "$ASSET_ID" '[.["dataset"] // .["dcat:dataset"]] | flatten | map(select(.["@id"] == $a))[0]
+    | [.hasPolicy // .["odrl:hasPolicy"]] | flatten | .[0]["@id"] // empty' "$STATE/catalog.json")"
+if [[ -z "$offer" ]]; then echo "No offer for '$ASSET_ID': run 'just publish' first." >&2; exit 1; fi
+echo "$offer" > "$STATE/offer-id"
+echo "Offer for '$ASSET_ID': $offer"
+echo "Full answer: $STATE/catalog.json. Next: just negotiate"

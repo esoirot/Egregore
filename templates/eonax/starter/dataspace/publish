@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Provider: publish the GTFS timetable. Three objects in its control plane:
+#   asset               what it is, and where the data really lives (dataAddress, never shown to consumers)
+#   policy definition   the rules (here: none, everyone may use it; the policies chapter adds some)
+#   contract definition which assets are offered under which access and contract policies
+# Publishing again changes nothing (an object that exists is kept).
+set -euo pipefail
+source "$(dirname "$0")/lib.sh"
+
+create() { # create <path> <request-file>
+    local code
+    code="$(curl -sS -o "$STATE/last-response.json" -w '%{http_code}' -X POST \
+        -H "X-Api-Key: ${PROVIDER_API_KEY:-provider-api-key}" -H "Content-Type: application/json" \
+        --data @"$REQUESTS/$2" "$PROVIDER_MANAGEMENT$1")"
+    case "$code" in
+        200) echo "✓ created  $2" ;;
+        409) echo "✓ exists   $2" ;;
+        *) echo "✗ $2: HTTP $code"; cat "$STATE/last-response.json"; echo; exit 1 ;;
+    esac
+}
+
+create /v3/assets asset.json
+create /v3/policydefinitions policy.json
+create /v3/contractdefinitions contract-definition.json
+echo "The provider offers '$ASSET_ID'. Next: just catalog"

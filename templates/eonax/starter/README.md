@@ -17,7 +17,7 @@ Each participant runs a **control plane** (catalog, contracts, transfers, its ma
 | Chapter | Layer | Command | Status |
 | --- | --- | --- | --- |
 | 1 | Connector anatomy: control plane, data plane, health | `just health` | ready |
-| 2 | Publish, catalog, negotiate, transfer (Dataspace Protocol) | `just publish`, `catalog`, `negotiate`, `transfer` | next |
+| 2 | Publish, catalog, negotiate, transfer (Dataspace Protocol) | `just publish`, `catalog`, `negotiate`, `transfer` (all: `just flow`) | ready |
 | 3 | Identity and trust: `did:web`, Identity Hub, Issuer Service, membership credential | `just onboard` | planned |
 | 4 | Usage policies (ODRL): purpose, time window | `just negotiate` | planned |
 | 5 | Federated catalogue | `just catalog` | planned |
@@ -33,6 +33,9 @@ Each participant runs a **control plane** (catalog, contracts, transfers, its ma
 | `provider-controlplane`, `consumer-controlplane` | 8080 `/api` (health), 8081 `/management` (your requests), 8082 `/protocol` (Dataspace Protocol, connector to connector), 8083 `/control` (to its data plane) | decides: what is offered, to whom, under which contract |
 | `provider-dataplane`, `consumer-dataplane` | 8080 `/api` (health), 8083 `/control`, 8085 `/public` (data pulls) | moves the data once a contract allows it |
 | `edc-postgres` | 5432 | state of every runtime |
+| `vault` | 8200 | secrets: each participant's keys, in its own folder (dev mode: in memory) |
+| `vault-seed` | — | one-shot job at each `dev up`: puts the transfer token keys into Vault |
+| `gtfs-backend` | 8000 | the provider's own system holding the timetable; not part of the data space |
 
 From `dev shell`:
 
@@ -49,6 +52,26 @@ Things to notice:
 
 After changing connector code, rebuild the images from the project folder on the host: `docker compose build && dev down && dev up`.
 
+## Chapter 2: publish, catalog, negotiate, transfer
+
+The heart of a data space: a provider offers data under a contract, a consumer finds it, agrees to the contract, and gets the data, without ever learning where the provider keeps it. Run the steps one by one (each prints what happened), or all of them with `just flow`.
+
+| Step | Who | What happens | Read |
+| --- | --- | --- | --- |
+| `just publish` | provider | creates an **asset** (the GTFS feed and its real location, `dataAddress`), a **policy** (here: no rules) and a **contract definition** (this asset, under this policy) in its control plane | `dataspace/publish`, `dataspace/requests/asset.json`, `policy.json`, `contract-definition.json` |
+| `just catalog` | consumer | asks the provider's connector for its **catalog** (Dataspace Protocol); each dataset carries **offers** (`odrl:hasPolicy`) | `dataspace/catalog`, `.dataspace/catalog.json` |
+| `just negotiate` | consumer | requests a contract on the offer; both connectors run the negotiation until **FINALIZED**, giving a **contract agreement** | `dataspace/negotiate`, `requests/contract-request.json` |
+| `just transfer` | consumer | starts a **transfer process** (HTTP pull) under the agreement; the provider's data plane hands out an **EDR** (endpoint + short-lived token); the consumer pulls `downloads/gtfs.zip` with it | `dataspace/transfer`, `.dataspace/edr.json` |
+
+Things to notice:
+
+* You always talk to **your own** connector (its management API, with your `X-Api-Key`); connectors talk to each other over the Dataspace Protocol (`/protocol`).
+* The consumer never sees `http://gtfs-backend:8000`: the EDR points at the provider's data plane, which fetches from the backend.
+* The EDR token is signed with keys from Vault (`vault-seed` put them there); try the same `curl` later and it expires.
+* Identity is still mocked: the provider trusts anyone. Chapter 3 replaces that with credentials.
+
+`just test` runs the whole flow and checks the consumer received a GTFS feed. Management API keys default to `provider-api-key` and `consumer-api-key`; set `PROVIDER_API_KEY` and `CONSUMER_API_KEY` in `.env` to change them (then `dev down && dev up`).
+
 ## Kubernetes-ready rules
 
 The stack runs on Docker Compose but must move to Kubernetes without redesign. Every component follows these rules (`templates/eonax/test` in Egregore checks the ones marked ✓):
@@ -57,7 +80,7 @@ The stack runs on Docker Compose but must move to Kubernetes without redesign. E
 2. Configuration only from environment variables or mounted files (later: ConfigMaps).
 3. Secrets only from a vault or environment variables (later: Kubernetes Secrets), never baked into images.
 4. ✓ Components find each other by service name; no `network_mode`, no host paths outside the project.
-5. ✓ Every component has a health endpoint and healthcheck (later: readiness and liveness probes).
+5. ✓ Every component has a health endpoint and healthcheck (later: readiness and liveness probes); one-shot jobs (label `eonax.role: job`, like `vault-seed`) run once instead (later: Kubernetes Jobs).
 6. Startup survives any start order (`restart: unless-stopped`; `depends_on` is only a convenience).
 7. State only in Postgres or named volumes (later: persistent volume claims).
 

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Consumer: ask for a contract on the offer. Both connectors run the negotiation state machine
+# (REQUESTED, AGREED, VERIFIED, FINALIZED); FINALIZED gives a contract agreement id.
+set -euo pipefail
+source "$(dirname "$0")/lib.sh"
+need offer-id catalog
+
+body="$(jq --arg id "$(cat "$STATE/offer-id")" '.policy["@id"] = $id' "$REQUESTS/contract-request.json")"
+negotiation="$(management consumer POST /v3/contractnegotiations "$body" | jq -r '.["@id"]')"
+echo "Negotiation $negotiation started"
+wait_for_state consumer "/v3/contractnegotiations/$negotiation" FINALIZED
+agreement="$(management consumer GET "/v3/contractnegotiations/$negotiation" | jq -r '.contractAgreementId')"
+echo "$agreement" > "$STATE/agreement-id"
+echo "✓ FINALIZED: contract agreement $agreement. Next: just transfer"

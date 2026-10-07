@@ -1,0 +1,13 @@
+{
+  "@context": { "@vocab": "https://w3id.org/edc/v0.0.1/ns/" },
+  "@id": "gtfs-demo-transit-offer",
+  "accessPolicyId": "open",
+  "contractPolicyId": "open",
+  "assetsSelector": [
+    {
+      "operandLeft": "https://w3id.org/edc/v0.0.1/ns/id",
+      "operator": "=",
+      "operandRight": "gtfs-demo-transit"
+    }
+  ]
+}

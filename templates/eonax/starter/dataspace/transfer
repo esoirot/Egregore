@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Consumer: start a transfer under the agreement, then pull the data (HTTP pull):
+#   1. the control planes agree on the transfer process (it reaches STARTED)
+#   2. the provider's data plane issues an EDR (Endpoint Data Reference): an endpoint + a short-lived token
+#   3. the consumer calls that endpoint with the token; the provider's data plane fetches the real data
+#      from its backend (the asset's dataAddress) and streams it back. The consumer never sees the backend.
+set -euo pipefail
+source "$(dirname "$0")/lib.sh"
+need agreement-id negotiate
+
+body="$(jq --arg id "$(cat "$STATE/agreement-id")" '.contractId = $id' "$REQUESTS/transfer-request.json")"
+transfer="$(management consumer POST /v3/transferprocesses "$body" | jq -r '.["@id"]')"
+echo "Transfer process $transfer started"
+wait_for_state consumer "/v3/transferprocesses/$transfer" STARTED
+
+# The EDR arrives asynchronously after STARTED: retry briefly.
+for _ in $(seq 1 20); do
+    if management consumer GET "/v3/edrs/$transfer/dataaddress" > "$STATE/edr.json" 2> /dev/null; then break; fi
+    sleep 1
+done
+endpoint="$(jq -r '.endpoint' "$STATE/edr.json")"
+token="$(jq -r '.authorization' "$STATE/edr.json")"
+echo "EDR: endpoint $endpoint (token in $STATE/edr.json)"
+
+mkdir -p downloads
+curl -sS --fail-with-body -H "Authorization: $token" "$endpoint" -o downloads/gtfs.zip
+echo "✓ downloads/gtfs.zip ($(wc -c < downloads/gtfs.zip) bytes):"
+jar tf downloads/gtfs.zip | sed 's/^/    /'

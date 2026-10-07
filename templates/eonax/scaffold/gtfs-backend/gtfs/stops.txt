@@ -1,0 +1,6 @@
+stop_id,stop_name,stop_lat,stop_lon
+S1,Opera,48.87070,2.33210
+S2,Chatelet,48.85840,2.34700
+S3,Bastille,48.85310,2.36910
+S4,Gare de Lyon,48.84470,2.37350
+S5,Nation,48.84830,2.39570

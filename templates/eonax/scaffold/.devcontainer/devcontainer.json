@@ -12,7 +12,8 @@
       "jdkDistro": "amzn",
       "installGradle": true,
       "gradleVersion": "9.8.0"
-    }
+    },
+    "./tools": {}
   },
   "postCreateCommand": "just install"
 }

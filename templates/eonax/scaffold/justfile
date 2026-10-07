@@ -17,9 +17,11 @@ install:
 # Show the data space health (the consumer app comes in a later chapter)
 dev: health
 
-# Run the connector code's tests
-test *args:
+# Run the connector code's tests, then the data space flow end to end
+test *args: flow
     cd connector && gradle --quiet test {{args}}
+    jar tf downloads/gtfs.zip | grep -qx stops.txt
+    @echo "✓ the consumer received the provider's GTFS feed"
 
 # Compile and run the checks, without tests
 lint:
@@ -28,6 +30,25 @@ lint:
 # Build the runtime jars (the stack images build them on their own, see connector/Dockerfile)
 build:
     cd connector && gradle --quiet shadowJar
+
+# Provider: publish the GTFS timetable (asset, policy, contract definition)
+publish:
+    dataspace/publish
+
+# Consumer: read the provider's catalog, keep the offer
+catalog:
+    dataspace/catalog
+
+# Consumer: negotiate a contract on the offer
+negotiate:
+    dataspace/negotiate
+
+# Consumer: transfer under the contract and pull the data (into downloads/)
+transfer:
+    dataspace/transfer
+
+# The whole chapter-2 flow: publish, catalog, negotiate, transfer
+flow: publish catalog negotiate transfer
 
 # Every data space component reports healthy (its readiness probe)
 health:

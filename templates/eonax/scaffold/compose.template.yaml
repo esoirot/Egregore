@@ -8,6 +8,8 @@ x-connector: &connector
   depends_on:
     edc-postgres:
       condition: service_healthy
+    vault-seed:
+      condition: service_completed_successfully
   healthcheck:
     test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/check/health"]
     interval: 5s
@@ -23,6 +25,8 @@ x-runtime-env: &runtime-env
   EDC_DATASOURCE_DEFAULT_USER: ${EDC_DB_USER:-edc}
   EDC_DATASOURCE_DEFAULT_PASSWORD: ${EDC_DB_PASSWORD:-edc}
   EDC_SQL_SCHEMA_AUTOCREATE: "true"
+  EDC_VAULT_HASHICORP_URL: http://vault:8200 # secrets (keys, tokens): one folder per participant
+  EDC_VAULT_HASHICORP_TOKEN: ${VAULT_TOKEN:-dev-root-token}
 
 x-controlplane-env: &controlplane-env
   <<: *runtime-env
@@ -30,6 +34,7 @@ x-controlplane-env: &controlplane-env
   WEB_HTTP_MANAGEMENT_PATH: /management
   WEB_HTTP_PROTOCOL_PORT: "8082" # Dataspace Protocol: connector <-> connector
   WEB_HTTP_PROTOCOL_PATH: /protocol
+  WEB_HTTP_MANAGEMENT_AUTH_TYPE: tokenbased # requests need the header X-Api-Key
 
 x-dataplane-env: &dataplane-env
   <<: *runtime-env
@@ -53,6 +58,42 @@ services:
       timeout: 3s
       retries: 10
 
+  # Dev mode: in memory, unsealed, one root token. Production: a real Vault (or Kubernetes Secrets);
+  # the runtimes only need EDC_VAULT_HASHICORP_URL and _TOKEN changed.
+  vault:
+    image: hashicorp/vault:2.1.1@sha256:47f14a6acb98f48d798a07df7c83f23a6e636e1cf724c5f8ff165cb32667a1e2
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_TOKEN:-dev-root-token}
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8200/v1/sys/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Runs once per dev up (Vault dev mode forgets everything on restart).
+  vault-seed:
+    build: vault-seed
+    labels:
+      eonax.role: job
+    depends_on:
+      vault:
+        condition: service_healthy
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_TOKEN:-dev-root-token}
+      PARTICIPANTS: provider consumer
+
+  # The provider's own system holding the data (not part of the data space).
+  gtfs-backend:
+    build: gtfs-backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/gtfs.zip')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   provider-controlplane:
     <<: *connector
     build: { context: connector, args: { MODULE: controlplane } }
@@ -60,6 +101,8 @@ services:
       <<: *controlplane-env
       EDC_PARTICIPANT_ID: provider
       EDC_HOSTNAME: provider-controlplane
+      EDC_VAULT_HASHICORP_FOLDER: provider
+      WEB_HTTP_MANAGEMENT_AUTH_KEY: ${PROVIDER_API_KEY:-provider-api-key}
       EDC_DSP_CALLBACK_ADDRESS: http://provider-controlplane:8082/protocol
       EDC_DATASOURCE_DEFAULT_URL: jdbc:postgresql://edc-postgres:5432/provider_controlplane
 
@@ -70,9 +113,10 @@ services:
       <<: *dataplane-env
       EDC_PARTICIPANT_ID: provider
       EDC_HOSTNAME: provider-dataplane
+      EDC_VAULT_HASHICORP_FOLDER: provider
       EDC_COMPONENT_ID: provider-dataplane # stable id: a restart re-registers instead of adding an instance
       EDC_DPF_SELECTOR_URL: http://provider-controlplane:8083/control/v1/dataplanes
-      EDC_DATAPLANE_API_PUBLIC_BASEURL: http://provider-dataplane:8085/public
+      EDC_DATAPLANE_PROXY_PUBLIC_ENDPOINT: http://provider-dataplane:8085/public # goes into the EDR
       EDC_DATASOURCE_DEFAULT_URL: jdbc:postgresql://edc-postgres:5432/provider_dataplane
 
   consumer-controlplane:
@@ -82,6 +126,8 @@ services:
       <<: *controlplane-env
       EDC_PARTICIPANT_ID: consumer
       EDC_HOSTNAME: consumer-controlplane
+      EDC_VAULT_HASHICORP_FOLDER: consumer
+      WEB_HTTP_MANAGEMENT_AUTH_KEY: ${CONSUMER_API_KEY:-consumer-api-key}
       EDC_DSP_CALLBACK_ADDRESS: http://consumer-controlplane:8082/protocol
       EDC_DATASOURCE_DEFAULT_URL: jdbc:postgresql://edc-postgres:5432/consumer_controlplane
 
@@ -92,9 +138,10 @@ services:
       <<: *dataplane-env
       EDC_PARTICIPANT_ID: consumer
       EDC_HOSTNAME: consumer-dataplane
+      EDC_VAULT_HASHICORP_FOLDER: consumer
       EDC_COMPONENT_ID: consumer-dataplane # stable id: a restart re-registers instead of adding an instance
       EDC_DPF_SELECTOR_URL: http://consumer-controlplane:8083/control/v1/dataplanes
-      EDC_DATAPLANE_API_PUBLIC_BASEURL: http://consumer-dataplane:8085/public
+      EDC_DATAPLANE_PROXY_PUBLIC_ENDPOINT: http://consumer-dataplane:8085/public # goes into the EDR
       EDC_DATASOURCE_DEFAULT_URL: jdbc:postgresql://edc-postgres:5432/consumer_dataplane
 
 volumes:
