@@ -1,0 +1,9 @@
+{
+  "@context": ["https://w3id.org/edc/connector/management/v2"],
+  "@type": "CelExpression",
+  "@id": "purpose-cel",
+  "leftOperand": "http://www.w3.org/ns/odrl/2/purpose",
+  "description": "A contract's purpose must be one of the data space's: mobility or tourism",
+  "scopes": ["contract.negotiation", "transfer.process"],
+  "expression": "this.rightOperand in ['mobility', 'tourism']"
+}

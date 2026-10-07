@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Checks the usage policies (run by just test, after the flow and the trust rules):
+#   1. purpose: the GTFS contract allows "mobility" use; a consumer that asks for another purpose is
+#      refused, one that accepts the offer as is gets a contract (just flow did)
+#   2. time window, at use time: the contract on gtfs-expired ended in the past; signing works,
+#      using it (transfer) is refused
+#   3. time window, while in use: the contract on gtfs-30s ends 30 s after signing; the transfer
+#      starts, then the provider's policy monitor stops it, and its access token stops working
+set -euo pipefail
+source "$(dirname "$0")/lib.sh"
+
+dataspace/catalog > /dev/null
+
+if dataspace/negotiate gtfs-demo-transit advertising > /dev/null 2>&1; then
+    echo "✗ a contract for 'advertising' use was signed" >&2; exit 1
+fi
+echo "✓ purpose 'advertising' refused (the offer allows 'mobility')"
+
+dataspace/negotiate gtfs-expired > /dev/null
+if dataspace/transfer gtfs-expired > /dev/null 2>&1; then
+    echo "✗ a transfer ran under an expired contract" >&2; exit 1
+fi
+echo "✓ expired contract: signed, but its transfer refused"
+
+dataspace/negotiate gtfs-30s > /dev/null
+dataspace/transfer gtfs-30s > /dev/null
+transfer="$(cat "$STATE/transfer-id.gtfs-30s")"
+echo "  transfer under the 30 s contract started; waiting for the policy monitor..."
+for _ in $(seq 1 120); do
+    if [[ "$(management consumer GET "/v3/transferprocesses/$transfer" | jq -r .state)" == TERMINATED ]]; then
+        code="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: $(jq -r .authorization "$STATE/edr.gtfs-30s.json")" \
+            "$(jq -r .endpoint "$STATE/edr.gtfs-30s.json")")"
+        if [[ "$code" == 200 ]]; then echo "✗ the ended contract's access token still pulls data" >&2; exit 1; fi
+        echo "✓ 30 s contract: its transfer stopped once the contract ended, its access token refused ($code)"
+        exit 0
+    fi
+    sleep 1
+done
+echo "✗ the transfer under the 30 s contract still runs after 2 minutes" >&2
+exit 1

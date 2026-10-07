@@ -19,7 +19,7 @@ Each participant runs a **control plane** (catalog, contracts, transfers, its ma
 | 1 | Connector anatomy: control plane, data plane, health | `just health` | ready |
 | 2 | Publish, catalog, negotiate, transfer (Dataspace Protocol) | `just publish`, `catalog`, `negotiate`, `transfer` | ready |
 | 3 | Identity and trust: `did:web`, Identity Hub, Issuer Service, membership credential | `just authority`, `identity`, `membership` (all: `just onboard`) | ready |
-| 4 | Usage policies (ODRL): purpose, time window | `just negotiate` | planned |
+| 4 | Usage policies (ODRL): purpose, time window | `just negotiate <asset> [purpose]`, `just transfer <asset>` | ready |
 | 5 | Federated catalogue | `just catalog` | planned |
 | 6 | Gaia-X compliance (mocked unless configured) | `just gaiax` | planned |
 | 7 | Consumer app, full flow test | `just dev`, `just test` | planned |
@@ -64,15 +64,15 @@ The heart of a data space: a provider offers data under a contract, a consumer f
 | --- | --- | --- | --- |
 | `just publish` | provider | creates an **asset** (the GTFS feed and its real location, `dataAddress`), a **policy** (`members-only`, see chapter 3) and a **contract definition** (this asset, under this policy) in its control plane | `dataspace/publish`, `dataspace/requests/asset.json`, `policy.json`, `contract-definition.json` |
 | `just catalog` | consumer | asks the provider's connector for its **catalog** (Dataspace Protocol); each dataset carries **offers** (`odrl:hasPolicy`) | `dataspace/catalog`, `.dataspace/catalog.json` |
-| `just negotiate` | consumer | sends the offer back **exactly as offered** (rules included) as a contract request; both connectors run the negotiation until **FINALIZED**, giving a **contract agreement** | `dataspace/negotiate`, `requests/contract-request.json`, `.dataspace/offer.json` |
-| `just transfer` | consumer | starts a **transfer process** (HTTP pull) under the agreement; the provider's data plane hands out an **EDR** (endpoint + short-lived token); the consumer pulls `downloads/gtfs.zip` with it | `dataspace/transfer`, `.dataspace/edr.json` |
+| `just negotiate` | consumer | sends the offer back **exactly as offered** (rules included) as a contract request; both connectors run the negotiation until **FINALIZED**, giving a **contract agreement** | `dataspace/negotiate`, `requests/contract-request.json`, `.dataspace/offer.<asset>.json` |
+| `just transfer` | consumer | starts a **transfer process** (HTTP pull) under the agreement; the provider's data plane hands out an **EDR** (endpoint + short-lived token); the consumer pulls `downloads/gtfs-demo-transit.zip` with it | `dataspace/transfer`, `.dataspace/edr.<asset>.json` |
 
 Things to notice:
 
 * You always talk to **your own** connector (its management API, with your `X-Api-Key`); connectors talk to each other over the Dataspace Protocol (`/protocol`).
 * The consumer never sees `http://gtfs-backend:8000`: the EDR points at the provider's data plane, which fetches from the backend.
 * The EDR token is signed with keys from Vault (`vault-seed` put them there); try the same `curl` later and it expires.
-`just test` runs the whole flow, checks the consumer received a GTFS feed, then checks the trust rules (chapter 3). Management API keys default to `provider-api-key` and `consumer-api-key`; set `PROVIDER_API_KEY` and `CONSUMER_API_KEY` in `.env` to change them (then `dev down && dev up`).
+`negotiate` and `transfer` take an asset (default `gtfs-demo-transit`; others in chapter 4). `just test` runs the whole flow, checks the consumer received a GTFS feed, then checks the trust rules (chapter 3) and the usage policies (chapter 4). Management API keys default to `provider-api-key` and `consumer-api-key`; set `PROVIDER_API_KEY` and `CONSUMER_API_KEY` in `.env` to change them (then `dev down && dev up`).
 
 ## Chapter 3: identity and trust
 
@@ -98,6 +98,24 @@ Things to try:
 * Remove the consumer's credential (what `dataspace/check-trust` does), and every request is refused; `just membership consumer` brings it back.
 
 The authority's attestation accepts every registered holder: registering a holder is the membership decision. A real authority would check its own registry there.
+
+## Chapter 4: usage policies
+
+Chapter 3 decided **who** gets in. Usage policies decide **how** the data may be used once you have it. They are ODRL constraints in the contract policy, which the consumer accepts by signing (`.dataspace/offer.<asset>.json` shows them; `just catalog` prints them):
+
+| Rule | ODRL constraint | When it is checked | Read |
+| --- | --- | --- | --- |
+| members only | `edc:MembershipCredential eq active` | every request (CEL `membership-cel`) | `requests/policy-gtfs-contract.json` |
+| purpose | `odrl:purpose eq mobility` | signing and use; the CEL expression `purpose-cel` limits purposes to the data space's (`mobility`, `tourism`) | `requests/cel-purpose.json` |
+| time window | `edc:inForceDate lteq contractAgreement+1d` | at use (transfer), then by the **policy monitor** while the transfer runs | EDC built-in |
+
+Try them:
+
+* `just negotiate gtfs-demo-transit advertising`: the consumer asks for another purpose. The provider's terms are not negotiable: it answers with its own agreement (mobility), which no longer matches the consumer's request, so the consumer rejects it and the negotiation ends TERMINATED. Purpose is a legal promise the consumer signs: nothing technical stops it from misusing the data afterwards, which is why the agreement is recorded on both sides (audit).
+* `just negotiate gtfs-expired`, then `just transfer gtfs-expired`: the contract window ended on 2026-01-01. Signing works (time is not checked at signing), the transfer is refused: the rule is checked when you **use** the contract.
+* `just negotiate gtfs-30s`, then `just transfer gtfs-30s`: valid for 30 s after signing. The transfer starts; within about 10 s after the end, the provider's **policy monitor** (`EDC_POLICY_MONITOR_PERIOD`, here every 10 s, EDC's default is 1 hour) terminates it, and the EDR token you got stops working (HTTP 403): enforcement is technical here.
+
+`dataspace/check-policies` runs these three checks (part of `just test`).
 
 ## Kubernetes-ready rules
 

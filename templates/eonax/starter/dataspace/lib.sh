@@ -15,7 +15,7 @@ ISSUER_KEY="${ISSUER_SUPERUSER_KEY:-c3VwZXItdXNlcg==.c3VwZXItc2VjcmV0LWtleQo=}"
 identity_api() { echo "http://$1-identityhub:7081/api/identity/v1beta/participants"; } # identity_api provider|consumer
 IDENTITYHUB_KEY="${IDENTITYHUB_SUPERUSER_KEY:-c3VwZXItdXNlcg==.c3VwZXItc2VjcmV0LWtleQo=}"
 
-ASSET_ID=gtfs-demo-transit
+ASSET_ID=gtfs-demo-transit # the default asset of catalog, negotiate, transfer
 STATE=.dataspace
 REQUESTS=dataspace/requests
 

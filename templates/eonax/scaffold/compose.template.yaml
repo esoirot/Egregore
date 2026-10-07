@@ -43,6 +43,9 @@ x-controlplane-env: &controlplane-env
   WEB_HTTP_PROTOCOL_PORT: "8082" # Dataspace Protocol: connector <-> connector
   WEB_HTTP_PROTOCOL_PATH: /protocol
   WEB_HTTP_MANAGEMENT_AUTH_TYPE: tokenbased # requests need the header X-Api-Key
+  # The policy monitor re-checks running transfers against their contract (e.g. its end date):
+  # every 10 s here, to see it act; EDC's default is 1 hour.
+  EDC_POLICY_MONITOR_PERIOD: PT10S
   # Trust (DCP): only credentials signed by the authority count...
   EDC_IAM_TRUSTED-ISSUER_AUTHORITY_ID: did:web:issuerservice%3A10016:issuer
   # ...and every request asks the other side to present its MembershipCredential.

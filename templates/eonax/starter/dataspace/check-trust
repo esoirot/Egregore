@@ -7,8 +7,9 @@
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 
+rm -f "$STATE"/offer.*.json
 dataspace/catalog > /dev/null
-if jq -e '[.["dataset"] // .["dcat:dataset"]] | flatten | any(.["@id"] == "gtfs-partners-only")' "$STATE/catalog.json" > /dev/null; then
+if [[ -e "$STATE/offer.gtfs-partners-only.json" ]]; then
     echo "✗ the consumer sees the partners-only offer" >&2; exit 1
 fi
 echo "✓ partners-only offer hidden from a consumer without a PartnerCredential"

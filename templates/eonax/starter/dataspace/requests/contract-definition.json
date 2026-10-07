@@ -4,7 +4,7 @@
   },
   "@id": "gtfs-demo-transit-offer",
   "accessPolicyId": "members-only",
-  "contractPolicyId": "members-only",
+  "contractPolicyId": "gtfs-contract",
   "assetsSelector": [
     {
       "operandLeft": "https://w3id.org/edc/v0.0.1/ns/id",

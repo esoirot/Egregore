@@ -17,12 +17,13 @@ install:
 # Show the data space health (the consumer app comes in a later chapter)
 dev: health
 
-# Run the connector code's tests, then the data space end to end: the flow, then the trust rules
+# Run the connector code's tests, then the data space end to end: the flow, the trust rules, the usage policies
 test *args: flow
     cd connector && gradle --quiet test {{args}}
-    jar tf downloads/gtfs.zip | grep -qx stops.txt
+    jar tf downloads/gtfs-demo-transit.zip | grep -qx stops.txt
     @echo "✓ the consumer received the provider's GTFS feed"
     dataspace/check-trust
+    dataspace/check-policies
 
 # Compile and run the checks, without tests
 lint:
@@ -55,13 +56,13 @@ publish:
 catalog:
     dataspace/catalog
 
-# Consumer: negotiate a contract on the offer
-negotiate:
-    dataspace/negotiate
+# Consumer: negotiate a contract on an offer; with a purpose, ask for that use instead
+negotiate asset="gtfs-demo-transit" purpose="":
+    dataspace/negotiate {{asset}} {{purpose}}
 
-# Consumer: transfer under the contract and pull the data (into downloads/)
-transfer:
-    dataspace/transfer
+# Consumer: transfer under the contract and pull the data (into downloads/<asset>.zip)
+transfer asset="gtfs-demo-transit":
+    dataspace/transfer {{asset}}
 
 # The whole flow: onboard, publish, catalog, negotiate, transfer
 flow: onboard publish catalog negotiate transfer

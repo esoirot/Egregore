@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Consumer: ask the provider's connector what it offers (Dataspace Protocol catalog request).
 # The consumer calls its OWN management API; its connector talks to the provider's connector.
-# Each dataset comes with offers (odrl:hasPolicy): the contract a consumer can ask for.
+# Each dataset comes with an offer (odrl:hasPolicy): the contract a consumer can ask for, rules included.
+# Only offers whose access policy the consumer passes are listed.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 
@@ -11,12 +12,14 @@ if ! management consumer POST /v3/catalog/request "$(cat "$REQUESTS/catalog-requ
     exit 1
 fi
 
-# One dataset is an object, several are an array: normalize to an array.
-jq -r '[.["dataset"] // .["dcat:dataset"]] | flatten | .[] | "dataset \(.["@id"]): \(.name // .["edc:name"] // "")"' "$STATE/catalog.json"
-# Keep the whole offer (its rules included): negotiate sends it back as is.
-jq --arg a "$ASSET_ID" '[.["dataset"] // .["dcat:dataset"]] | flatten | map(select(.["@id"] == $a))[0]
-    | [.hasPolicy // .["odrl:hasPolicy"]] | flatten | .[0] // empty' "$STATE/catalog.json" > "$STATE/offer.json"
-if [[ ! -s "$STATE/offer.json" ]]; then echo "No offer for '$ASSET_ID': run 'just publish' first." >&2; exit 1; fi
-echo "Offer for '$ASSET_ID': $(jq -r '.["@id"]' "$STATE/offer.json")"
-echo "  rules: $(jq -c '.permission // .["odrl:permission"]' "$STATE/offer.json")"
-echo "Full answer: $STATE/catalog.json. Next: just negotiate"
+# One dataset is an object, several are an array: normalize to an array. Keep each offer whole
+# (its rules included): negotiate sends it back as is.
+datasets="$(jq -c '[.["dataset"] // .["dcat:dataset"]] | flatten | map(select(. != null))' "$STATE/catalog.json")"
+if [[ "$(jq length <<< "$datasets")" -eq 0 ]]; then echo "No offers: run 'just publish' first." >&2; exit 1; fi
+for asset in $(jq -r '.[]["@id"]' <<< "$datasets"); do
+    jq --arg a "$asset" 'map(select(.["@id"] == $a))[0] | [.hasPolicy // .["odrl:hasPolicy"]] | flatten | .[0]' \
+        <<< "$datasets" > "$STATE/offer.$asset.json"
+    echo "dataset $asset: $(jq -r --arg a "$asset" 'map(select(.["@id"] == $a))[0] | .name // .["edc:name"] // ""' <<< "$datasets")"
+    echo "  rules: $(jq -c '.permission // .["odrl:permission"]' "$STATE/offer.$asset.json")"
+done
+echo "Full answer: $STATE/catalog.json. Next: just negotiate [asset] (default $ASSET_ID)"
