@@ -1,0 +1,101 @@
+# The data space, next to the dev container (included by compose.yaml).
+# Kubernetes-ready (README, "Kubernetes-ready rules"): one process per container, images built from a
+# Dockerfile or pinned by digest, configuration and secrets from the environment only, services found
+# by name, a healthcheck each, state only in Postgres. Nothing here depends on the dev container.
+
+x-connector: &connector
+  restart: unless-stopped # any start order works: a runtime that starts before Postgres restarts
+  depends_on:
+    edc-postgres:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/check/health"]
+    interval: 5s
+    timeout: 3s
+    retries: 30
+    start_period: 30s
+
+x-runtime-env: &runtime-env
+  WEB_HTTP_PORT: "8080" # default API: health (/api/check/health)
+  WEB_HTTP_PATH: /api
+  WEB_HTTP_CONTROL_PORT: "8083" # control API: control plane <-> data plane
+  WEB_HTTP_CONTROL_PATH: /control
+  EDC_DATASOURCE_DEFAULT_USER: ${EDC_DB_USER:-edc}
+  EDC_DATASOURCE_DEFAULT_PASSWORD: ${EDC_DB_PASSWORD:-edc}
+  EDC_SQL_SCHEMA_AUTOCREATE: "true"
+
+x-controlplane-env: &controlplane-env
+  <<: *runtime-env
+  WEB_HTTP_MANAGEMENT_PORT: "8081" # management API: your requests (assets, policies, negotiations)
+  WEB_HTTP_MANAGEMENT_PATH: /management
+  WEB_HTTP_PROTOCOL_PORT: "8082" # Dataspace Protocol: connector <-> connector
+  WEB_HTTP_PROTOCOL_PATH: /protocol
+
+x-dataplane-env: &dataplane-env
+  <<: *runtime-env
+  WEB_HTTP_PUBLIC_PORT: "8085" # public API: where a consumer pulls the data
+  WEB_HTTP_PUBLIC_PATH: /public
+  EDC_TRANSFER_PROXY_TOKEN_SIGNER_PRIVATEKEY_ALIAS: transfer-proxy-private-key
+  EDC_TRANSFER_PROXY_TOKEN_VERIFIER_PUBLICKEY_ALIAS: transfer-proxy-public-key
+
+services:
+  edc-postgres:
+    image: postgres:18.6@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5ea167f298f2da9722
+    environment:
+      POSTGRES_USER: ${EDC_DB_USER:-edc}
+      POSTGRES_PASSWORD: ${EDC_DB_PASSWORD:-edc}
+    volumes:
+      - edc-postgres-data:/var/lib/postgresql
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  provider-controlplane:
+    <<: *connector
+    build: { context: connector, args: { MODULE: controlplane } }
+    environment:
+      <<: *controlplane-env
+      EDC_PARTICIPANT_ID: provider
+      EDC_HOSTNAME: provider-controlplane
+      EDC_DSP_CALLBACK_ADDRESS: http://provider-controlplane:8082/protocol
+      EDC_DATASOURCE_DEFAULT_URL: jdbc:postgresql://edc-postgres:5432/provider_controlplane
+
+  provider-dataplane:
+    <<: *connector
+    build: { context: connector, args: { MODULE: dataplane } }
+    environment:
+      <<: *dataplane-env
+      EDC_PARTICIPANT_ID: provider
+      EDC_HOSTNAME: provider-dataplane
+      EDC_COMPONENT_ID: provider-dataplane # stable id: a restart re-registers instead of adding an instance
+      EDC_DPF_SELECTOR_URL: http://provider-controlplane:8083/control/v1/dataplanes
+      EDC_DATAPLANE_API_PUBLIC_BASEURL: http://provider-dataplane:8085/public
+      EDC_DATASOURCE_DEFAULT_URL: jdbc:postgresql://edc-postgres:5432/provider_dataplane
+
+  consumer-controlplane:
+    <<: *connector
+    build: { context: connector, args: { MODULE: controlplane } }
+    environment:
+      <<: *controlplane-env
+      EDC_PARTICIPANT_ID: consumer
+      EDC_HOSTNAME: consumer-controlplane
+      EDC_DSP_CALLBACK_ADDRESS: http://consumer-controlplane:8082/protocol
+      EDC_DATASOURCE_DEFAULT_URL: jdbc:postgresql://edc-postgres:5432/consumer_controlplane
+
+  consumer-dataplane:
+    <<: *connector
+    build: { context: connector, args: { MODULE: dataplane } }
+    environment:
+      <<: *dataplane-env
+      EDC_PARTICIPANT_ID: consumer
+      EDC_HOSTNAME: consumer-dataplane
+      EDC_COMPONENT_ID: consumer-dataplane # stable id: a restart re-registers instead of adding an instance
+      EDC_DPF_SELECTOR_URL: http://consumer-controlplane:8083/control/v1/dataplanes
+      EDC_DATAPLANE_API_PUBLIC_BASEURL: http://consumer-dataplane:8085/public
+      EDC_DATASOURCE_DEFAULT_URL: jdbc:postgresql://edc-postgres:5432/consumer_dataplane
+
+volumes:
+  edc-postgres-data:

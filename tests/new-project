@@ -131,7 +131,10 @@ app_port_defaults_when_repo_example_lacks_it() {
     own_projects_dir envd
     make_repo "$WORK/src/envd" ".env.example=FOO=bar" "Gemfile=x"
     "$NEW_PROJECT" rails envd --from "$WORK/src/envd"
-    grep -qx "APP_PORT=3000" "$PROJECTS_DIR/envd/.env"
+    # 3000, unless something on this machine already listens there.
+    local want=3000
+    while (exec 3<> "/dev/tcp/127.0.0.1/$want") 2> /dev/null; do want=$((want + 1)); done
+    grep -qx "APP_PORT=$want" "$PROJECTS_DIR/envd/.env"
 }
 
 repo_devcontainer_is_kept_and_reported() {
@@ -357,7 +360,8 @@ shared_files_reach_every_template() {
     for t in $(template_names); do
         "$NEW_PROJECT" "$t" "shared-$t"
         for f in compose.yaml .env.example; do
-            [[ "$(cat "$PROJECTS_DIR/shared-$t/$f")" == \
+            # A template with its own services (compose.template.yaml) adds an include: block on top.
+            [[ "$(awk 'NR == 1 && /^include:$/ { skip = 1 } skip { if (/^$/) skip = 0; next } 1' "$PROJECTS_DIR/shared-$t/$f")" == \
                "$(sed -e "s|{{PROJECT_NAME}}|shared-$t|g" -e "s|{{IMAGE}}|$BASE_IMAGE|g" \
                       -e "s|{{PORT}}|$(template_port "$SANDBOX/templates/$t")|g" "$SANDBOX/templates/_shared/$f")" ]] \
                 || { echo "$t: $f differs from templates/_shared/$f"; return 1; }

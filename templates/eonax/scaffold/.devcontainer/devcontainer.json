@@ -1,0 +1,18 @@
+{
+  "name": "{{PROJECT_NAME}}",
+  "dockerComposeFile": "../compose.yaml",
+  "service": "dev",
+  "workspaceFolder": "/workspace",
+  "remoteUser": "dev",
+  "shutdownAction": "none",
+  "features": {
+    "ghcr.io/devcontainers/features/java:1": {
+      // renovate: datasource=java-version depName=java
+      "version": "21.0.12-amzn",
+      "jdkDistro": "amzn",
+      "installGradle": true,
+      "gradleVersion": "9.8.0"
+    }
+  },
+  "postCreateCommand": "just install"
+}

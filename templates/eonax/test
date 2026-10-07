@@ -1,0 +1,44 @@
+# shellcheck shell=bash
+# Scenarios for the eonax template: the data space stack keeps the Kubernetes-ready rules
+# (see templates/eonax/starter/README.md, "Kubernetes-ready rules").
+# Sourced by tests/new-project, which provides the helpers and variables.
+
+# eonax_stack_json <project>: the resolved compose configuration (JSON).
+eonax_stack_json() {
+    docker compose -f "$1/compose.yaml" config --format json
+}
+
+eonax_stack_is_kubernetes_ready() {
+    "$NEW_PROJECT" eonax eonax-k8s
+    local p="$PROJECTS_DIR/eonax-k8s"
+    eonax_stack_json "$p" | python3 -c 'import json, os, sys
+project = sys.argv[1]
+services = {n: s for n, s in json.load(sys.stdin)["services"].items() if n != "dev"}
+assert services, "no data space services"
+for name, s in services.items():
+    where = "service " + name + ": "
+    assert "healthcheck" in s, where + "needs a healthcheck (readiness probe)"
+    assert "network_mode" not in s, where + "network_mode does not exist in Kubernetes"
+    for v in s.get("volumes", []):
+        assert v["type"] != "bind" or v["source"].startswith(project + "/"), where + "binds a host path: " + v["source"]
+    if "build" in s:
+        b = s["build"]
+        assert os.path.isfile(os.path.join(b["context"], b.get("dockerfile", "Dockerfile"))), where + "build without a Dockerfile"
+    else:
+        assert "@sha256:" in s["image"], where + "image must be pinned by digest"
+' "$p"
+}
+
+eonax_project_has_the_connector_sources() {
+    "$NEW_PROJECT" eonax eonax-src
+    local p="$PROJECTS_DIR/eonax-src"
+    local f
+    for f in connector/settings.gradle.kts connector/gradle/libs.versions.toml \
+             connector/controlplane/build.gradle.kts connector/dataplane/build.gradle.kts connector/Dockerfile; do
+        [[ -f "$p/$f" ]] || { echo "missing $f"; return 1; }
+    done
+    grep -qE '^edc = "[0-9]+\.[0-9]+\.[0-9]+"$' "$p/connector/gradle/libs.versions.toml"
+}
+
+scenario "eonax: the data space stack keeps the Kubernetes-ready rules" eonax_stack_is_kubernetes_ready
+scenario "eonax: a new project gets the connector sources" eonax_project_has_the_connector_sources

@@ -1,0 +1,44 @@
+# Team command contract: every project exposes install, dev, test, lint, build.
+# Run inside the container (dev shell). The data space runs next to it (compose.template.yaml);
+# reach its services by name, e.g. http://provider-controlplane:8081/management.
+
+set dotenv-load
+
+components := "provider-controlplane provider-dataplane consumer-controlplane consumer-dataplane"
+
+# List recipes
+default:
+    @just --list
+
+# Compile the connector runtimes (run by dev up)
+install:
+    cd connector && gradle --quiet classes
+
+# Show the data space health (the consumer app comes in a later chapter)
+dev: health
+
+# Run the connector code's tests
+test *args:
+    cd connector && gradle --quiet test {{args}}
+
+# Compile and run the checks, without tests
+lint:
+    cd connector && gradle --quiet check -x test
+
+# Build the runtime jars (the stack images build them on their own, see connector/Dockerfile)
+build:
+    cd connector && gradle --quiet shadowJar
+
+# Every data space component reports healthy (its readiness probe)
+health:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    failed=0
+    for c in {{components}}; do
+        if curl -fsS --max-time 3 "http://$c:8080/api/check/health" > /dev/null; then
+            echo "✓ $c"
+        else
+            echo "✗ $c (not ready: docker compose logs $c, from the project folder on the host)"; failed=1
+        fi
+    done
+    exit "$failed"
