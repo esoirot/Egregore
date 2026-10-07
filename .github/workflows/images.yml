@@ -63,14 +63,16 @@ jobs:
       - name: dev behavior tests
         run: tests/dev
 
-      - name: Full data space test of eonax (only when templates/eonax changed)
+      - name: Full data space test of eonax (only when something it uses changed)
         if: github.event_name != 'workflow_dispatch'
         env:
           PROJECTS_DIR: ${{ runner.temp }}/projects
         run: |
           set -euo pipefail
           base="${{ github.event.pull_request.base.sha || github.event.before }}"
-          if git diff --quiet "$base" -- templates/eonax; then echo "templates/eonax unchanged: skipped"; exit 0; fi
+          # The template, plus what every project goes through: shared files, scripts, images, this workflow.
+          uses=(templates/eonax templates/_shared scripts images .github/workflows/images.yml)
+          if git diff --quiet "$base" -- "${uses[@]}"; then echo "nothing eonax uses changed: skipped"; exit 0; fi
           scripts/new-project eonax ci-eonax-full
           cd "$PROJECTS_DIR/ci-eonax-full"
           "$GITHUB_WORKSPACE/scripts/dev" exec just test

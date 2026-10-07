@@ -120,12 +120,13 @@ public final class GaiaxCompliance {
         var now = Instant.now();
         var until = now.plus(Duration.ofDays(90));
 
-        var vatId = require("GAIAX_VAT_ID");
+        // <type>:<number>, type as the notary's route names it (vat-id, lei-code, eori).
+        var number = require("GAIAX_REGISTRATION_NUMBER").split(":", 2);
         var registrationId = base + "/registration-number.json";
-        var registration = get(require("GAIAX_NOTARY_URL") + "/registration-numbers/vat-id/" + encode(vatId)
+        var registration = get(require("GAIAX_NOTARY_URL") + "/registration-numbers/" + number[0] + "/" + encode(number[1])
                 + "?vcId=" + encode(registrationId) + "&subjectId=" + encode(registrationId + "#cs"), "the notary");
         save("registration-number.jwt", registration);
-        System.out.println("✓ registration number " + vatId + " notarized");
+        System.out.println("✓ registration number " + number[0] + " " + number[1] + " notarized");
 
         var address = map("type", "gx:Address", "gx:countryCode", require("GAIAX_COUNTRY_CODE"));
         var legalPerson = sign(map(

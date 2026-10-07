@@ -11,7 +11,7 @@ set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 
 required=(GAIAX_DID GAIAX_SIGNING_KEY GAIAX_CERT_CHAIN_URL GAIAX_COMPLIANCE_URL GAIAX_NOTARY_URL
-          GAIAX_LEGAL_NAME GAIAX_VAT_ID GAIAX_COUNTRY_CODE)
+          GAIAX_LEGAL_NAME GAIAX_REGISTRATION_NUMBER GAIAX_COUNTRY_CODE)
 missing=()
 for v in "${required[@]}"; do if [[ -z "${!v:-}" ]]; then missing+=("$v"); fi; done
 
@@ -38,10 +38,15 @@ elif [[ ${#missing[@]} -gt 0 ]]; then
 else
     mode=REAL
 fi
+# The notary's registration types (GXDCH notary v2): <type>:<number>.
+case "${GAIAX_REGISTRATION_NUMBER%%:*}" in
+    vat-id | lei-code | eori) ;;
+    *) echo "Gaia-X: GAIAX_REGISTRATION_NUMBER must be vat-id:<n>, lei-code:<n> or eori:<n>, not: $GAIAX_REGISTRATION_NUMBER" >&2; exit 1 ;;
+esac
 echo "Gaia-X: $mode (compliance at $GAIAX_COMPLIANCE_URL)"
 
 export GAIAX_DID GAIAX_SIGNING_KEY GAIAX_CERT_CHAIN_URL GAIAX_COMPLIANCE_URL GAIAX_NOTARY_URL \
-    GAIAX_LEGAL_NAME GAIAX_VAT_ID GAIAX_COUNTRY_CODE GAIAX_DID_WEB_USE_HTTP
+    GAIAX_LEGAL_NAME GAIAX_REGISTRATION_NUMBER GAIAX_COUNTRY_CODE GAIAX_DID_WEB_USE_HTTP
 export GAIAX_OUTPUT="$PWD/$STATE/gaiax"
 export GAIAX_WALLET_URL; GAIAX_WALLET_URL="$(identity_api provider)"
 export GAIAX_WALLET_KEY="$IDENTITYHUB_KEY" GAIAX_WALLET_PARTICIPANT=provider

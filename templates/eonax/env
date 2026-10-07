@@ -7,5 +7,5 @@ COMPOSE_PROFILES=gaiax-mock
 # GAIAX_COMPLIANCE_URL=https://compliance.lab.gaia-x.eu/v2
 # GAIAX_NOTARY_URL=https://registrationnumber.notary.lab.gaia-x.eu/v2
 # GAIAX_LEGAL_NAME=Example SAS
-# GAIAX_VAT_ID=FR00000000000
+# GAIAX_REGISTRATION_NUMBER=lei-code:969500XXXXXXXXXXXX00  # or vat-id:FR..., eori:FR... (the notary checks it)
 # GAIAX_COUNTRY_CODE=FR

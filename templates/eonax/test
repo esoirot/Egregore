@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Scenarios for the eonax template: the data space stack keeps the Kubernetes-ready rules
-# (see templates/eonax/starter/README.md, "Kubernetes-ready rules").
+# (see templates/eonax/scaffold/README.md, "Kubernetes-ready rules").
 # Sourced by tests/new-project, which provides the helpers and variables.
 
 # eonax_stack_json <project>: the resolved compose configuration (JSON).
@@ -54,6 +54,41 @@ eonax_gaiax_mock_stays_isolated() {
     ! grep -rqi "mock" "$p/connector/gaiax"
 }
 
+# The course material (connector, dataspace scripts, app, README) follows template fixes.
+eonax_update_reaches_the_course_material() {
+    local sb="$WORK/sb-eonax"; make_sandbox "$sb"
+    "$sb/scripts/new-project" eonax eonax-upd
+    local p="$PROJECTS_DIR/eonax-upd"
+    echo '{"edited": true}' > "$p/dataspace/requests/asset.json"
+    local f
+    for f in dataspace/transfer connector/Dockerfile app/index.html README.md dataspace/requests/asset.json; do
+        echo "# template fix" >> "$sb/templates/eonax/scaffold/$f"
+    done
+    (cd "$p" && "$sb/scripts/dev.real" update) > "$WORK/eonax-upd.out"
+    for f in dataspace/transfer connector/Dockerfile app/index.html README.md; do
+        grep -qx "# template fix" "$p/$f" || { echo "not updated: $f"; return 1; }
+    done
+    [[ -x "$p/dataspace/transfer" ]]
+    grep -qx '{"edited": true}' "$p/dataspace/requests/asset.json"
+    grep -qx "# template fix" "$p/dataspace/requests/asset.json.template-new"
+}
+
+# renovate: datasource=npm depName=playwright-core
+PLAYWRIGHT_VERSION=1.63.0 # the image's browsers must match the package: one version for both
+
+# The trip planner's map, drawn by a real browser from the template's sample data (app-layout.mjs).
+eonax_map_labels_do_not_overlap() {
+    "$NEW_PROJECT" eonax eonax-map
+    local p="$PROJECTS_DIR/eonax-map" t="$SANDBOX/templates/eonax"
+    docker run --rm -v "$p/app:/app:ro" -v "$p/gtfs-backend/gtfs:/gtfs:ro" \
+        -v "$p/poi-backend/pois.geojson:/pois.geojson:ro" -v "$t/app-layout.mjs:/check/app-layout.mjs:ro" \
+        "mcr.microsoft.com/playwright:v$PLAYWRIGHT_VERSION-noble" bash -c \
+        "cd /tmp && npm install --silent --no-audit --no-fund playwright-core@$PLAYWRIGHT_VERSION > /dev/null \
+         && cp /check/app-layout.mjs . && node app-layout.mjs"
+}
+
 scenario "eonax: the data space stack keeps the Kubernetes-ready rules" eonax_stack_is_kubernetes_ready
 scenario "eonax: a new project gets the connector sources" eonax_project_has_the_connector_sources
 scenario "eonax: the Gaia-X mock stays in gaiax-mock/ and its switch points" eonax_gaiax_mock_stays_isolated
+scenario "eonax: dev update reaches the course material" eonax_update_reaches_the_course_material
+scenario "eonax: the map labels do not overlap" eonax_map_labels_do_not_overlap

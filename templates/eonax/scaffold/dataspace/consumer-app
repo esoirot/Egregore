@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# The consumer's app (just dev): a trip planner page on port 3000 (open http://localhost:$APP_PORT).
+# It shows the provider's bus line, pulled through the data space at each page load (runs just flow
+# first if there was never a transfer), next to the travel app's own places to visit (its poi-backend).
+# Served by app/Server.java (Java's built-in HTTP server). With --check (just test): start it, check
+# it serves the page and live data, also once the transfer was stopped, then stop it.
+set -euo pipefail
+source "$(dirname "$0")/lib.sh"
+
+if [[ ! -s "$STATE/transfer-id.$ASSET_ID" ]]; then
+    echo "No transfer yet: running the data space flow first (just flow)."
+    just flow > /dev/null
+fi
+
+if [[ "${1:-}" != --check ]]; then
+    echo "Trip planner: http://localhost:${APP_PORT:-3000} (Ctrl+C to stop)"
+    exec java app/Server.java 0.0.0.0
+fi
+
+java app/Server.java 127.0.0.1 > "$STATE/consumer-app.log" 2>&1 &
+server=$!
+trap 'kill "$server" 2> /dev/null' EXIT
+for _ in $(seq 1 60); do
+    if curl -sf http://127.0.0.1:3000/ -o /dev/null; then break; fi
+    sleep 0.5
+done
+
+# transfer_of <path>: the app serves the path; prints the transfer process it pulled the data under.
+transfer_of() {
+    curl -sSf -D - "http://127.0.0.1:3000/$1" -o /dev/null | tr -d '\r' | sed -n 's/^x-transfer-process: //Ip' \
+        || { echo "✗ the app does not serve /$1 (log: $STATE/consumer-app.log)" >&2; exit 1; }
+}
+curl -sSf http://127.0.0.1:3000/ -o /dev/null || { echo "✗ the app does not serve its page" >&2; exit 1; }
+curl -sSf http://127.0.0.1:3000/data/pois.geojson -o /dev/null || { echo "✗ the app does not serve its places" >&2; exit 1; }
+transfer_of data/stop_times.txt > /dev/null
+transfer="$(transfer_of data/stops.txt)"
+[[ "$transfer" == "$(cat "$STATE/transfer-id.$ASSET_ID")" ]] \
+    || { echo "✗ the timetable was not pulled under the current transfer ($transfer)" >&2; exit 1; }
+echo "✓ the trip planner serves its page, its own places and the provider's timetable, pulled live (transfer $transfer)"
+
+management consumer POST "/v3/transferprocesses/$transfer/terminate" \
+    '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "TerminateTransfer", "reason": "consumer-app --check"}' > /dev/null
+wait_for_state consumer "/v3/transferprocesses/$transfer" TERMINATED
+again="$(transfer_of data/stops.txt)"
+[[ -n "$again" && "$again" != "$transfer" ]] || { echo "✗ after the transfer stopped, the app did not pull under a new one" >&2; exit 1; }
+echo "✓ transfer stopped: the app started a new one ($again) and still serves the timetable"

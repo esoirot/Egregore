@@ -2,7 +2,8 @@
 
 Plays, with the same paths and payload shapes as the real services it imitates:
   - the registration number notary (GXDCH notary v2.10.1):
-      GET  /notary/v2/registration-numbers/vat-id/{vatId}?vcId=&subjectId=   -> gx:VatID VC-JWT
+      GET  /notary/v2/registration-numbers/{vat-id,lei-code,eori}/{number}?vcId=&subjectId=
+                                                       -> gx:VatID, gx:LeiCode or gx:EORI VC-JWT
   - the compliance service (GXDCH compliance v2.14.0):
       POST /compliance/v2/api/credential-offers/standard-compliance?vcid=      (application/vp+jwt)
                                                                               -> gx:LabelCredential VC-JWT
@@ -113,20 +114,29 @@ def verify(token):
     return issuer, payload
 
 
-def notarize(vat_id, query):
-    if not re.fullmatch(r"[A-Z]{2}[0-9A-Z]{2,13}", vat_id):
-        raise Rejected(f"invalid VAT ID: {vat_id}")
+# Per notary route: the number's shape, the credential type and the subject property (as the real notary).
+REGISTRATIONS = {
+    "vat-id": (r"[A-Z]{2}[0-9A-Z]{2,13}", "gx:VatID", "gx:vatID"),
+    "lei-code": (r"[0-9A-Z]{18}[0-9]{2}", "gx:LeiCode", "schema:leiCode"),
+    "eori": (r"[A-Z]{2}[0-9A-Z]{1,15}", "gx:EORI", "gx:eori"),
+}
+
+
+def notarize(kind, number, query):
+    pattern, vc_type, prop = REGISTRATIONS[kind]
+    if not re.fullmatch(pattern, number):
+        raise Rejected(f"invalid {kind}: {number}")
     now = datetime.now(timezone.utc)
     return sign({
         "@context": [VC_CONTEXT, GX_CONTEXT],
-        "type": ["VerifiableCredential", "gx:VatID"],
+        "type": ["VerifiableCredential", vc_type],
         "id": query.get("vcId", [f"http://{HOST}/notary/v2/credentials/{uuid.uuid4()}"])[0],
-        "name": "VAT ID",
         "issuer": NOTARY_DID,
         "validFrom": now.isoformat(),
         "validUntil": (now + timedelta(days=90)).isoformat(),
-        "credentialSubject": {"id": query.get("subjectId", [""])[0], "gx:vatID": vat_id, "gx:countryCode": vat_id[:2]},
-        "evidence": {"gx:evidenceOf": "gx:VatID", "gx:evidenceURL": "MOCK: no registry was asked", "gx:executionDate": now.isoformat()},
+        "credentialSubject": {"@context": {"schema": "https://schema.org/"}, "id": query.get("subjectId", [""])[0],
+                              prop: number, "gx:countryCode": number[:2]},
+        "evidence": {"gx:evidenceOf": vc_type, "gx:evidenceURL": "MOCK: no registry was asked", "gx:executionDate": now.isoformat()},
     }, notary_key, NOTARY_DID, "vc")
 
 
@@ -148,7 +158,7 @@ def comply(presentation):
     if not any(i == participant and v.get("credentialSubject", {}).get("gaiaxTermsAndConditions") == TERMS_AND_CONDITIONS
                for i, v in types.get("gx:Issuer", [])):
         raise Rejected("missing a gx:Issuer signed by the participant, accepting the Gaia-X Terms and Conditions")
-    if not any(i == NOTARY_DID for i, _ in types.get("gx:VatID", [])):
+    if not any(i == NOTARY_DID for _, t, _ in REGISTRATIONS.values() for i, _ in types.get(t, [])):
         raise Rejected(f"missing a registration number from a trusted notary ({NOTARY_DID})")
     now = datetime.now(timezone.utc)
     offer = f"http://{HOST}/credential-offers/{uuid.uuid4()}"
@@ -182,9 +192,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200, certificate_chain, "application/x-pem-file")
             elif url.path in documents:
                 self.reply(200, documents[url.path], "application/did+json")
-            elif url.path.startswith("/notary/v2/registration-numbers/vat-id/"):
-                vat_id = unquote(url.path.rsplit("/", 1)[1])
-                self.reply(200, notarize(vat_id, parse_qs(url.query)), "application/vc+jwt")
+            elif (m := re.fullmatch(r"/notary/v2/registration-numbers/([a-z-]+)/([^/]+)", url.path)) and m[1] in REGISTRATIONS:
+                self.reply(200, notarize(m[1], unquote(m[2]), parse_qs(url.query)), "application/vc+jwt")
             else:
                 self.reply(404, {"message": f"MOCK: nothing at {url.path}"})
         except Rejected as e:

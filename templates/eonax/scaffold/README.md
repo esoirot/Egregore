@@ -14,6 +14,8 @@ just dev      # the trip planner on http://localhost:<APP_PORT> (APP_PORT in .en
 
 Then follow the chapters below one step at a time: each `just` step prints what happened, and its script in `dataspace/` (with the request bodies in `dataspace/requests/`) is the thing to read. To start over from nothing, see "After changing connector code" in chapter 1.
 
+Template fixes reach this project with `dev update` (on the host, in the project folder), the course material too: `connector/`, `dataspace/`, `app/`, this README. A file you edited is kept, the template's new version lands next to it as `<file>.template-new`.
+
 ## The cast
 
 | Participant | Role |
@@ -151,7 +153,7 @@ Membership says "the authority knows you". Gaia-X compliance says more: your **l
 `just gaiax` runs the Gaia-X Loire flow for the provider (client: `connector/gaiax/`, all credentials are VC-JWT signed with ES256):
 
 1. writes the provider's Gaia-X DID document (key, X.509 chain URL) and publishes it (on your domain; in mock mode, on the mock)
-2. asks the **notary** to sign the registration number (`gx:VatID`)
+2. asks the **notary** to sign the registration number (`GAIAX_REGISTRATION_NUMBER`, `<type>:<number>`): `vat-id` gives a `gx:VatID`, `lei-code` a `gx:LeiCode`, `eori` a `gx:EORI` (the mock uses an LEI)
 3. signs a `gx:LegalPerson` (name, address, registration number) and a `gx:Issuer` (accepts the Terms and Conditions)
 4. presents the three to the **compliance service** (a VP-JWT); it checks them and returns a `gx:LabelCredential`
 5. stores that credential in the provider's wallet (its Identity Hub)
@@ -160,13 +162,15 @@ Every step leaves its credential in `.dataspace/gaiax/` (decode one: `cut -d. -f
 
 **Mock or real.** Without any `GAIAX_*` variable, the client talks to `gaiax-mock` (the `gaiax-mock` profile in `.env` starts it): offline, but what it signs is trusted by nobody (`gaiax-mock/README.md` says what it checks and what not). For the real GXDCH you need a domain serving your `did.json` over HTTPS, an X.509 certificate chain for your key, a real registration number, and every `GAIAX_*` variable listed in `.env` (a partial set is refused); remove `gaiax-mock` from `COMPOSE_PROFILES`, then `dev down && dev up`. The client code does not change. `just health` says which mode is on.
 
+How close the mock is to the real thing: `dataspace/check-gaiax --lab` (needs the internet) asks the real GXDCH **lab notary** for public registration numbers of each type and checks it answers like the mock (issuer, credential type, subject). The real **compliance** service was never run end to end from this project: it needs a public HTTPS domain for your `did.json` and an X.509 chain for your signing key up to a trust anchor. A VAT ID goes through the EU VIES registry, which often rate-limits the notary: an LEI is the more reliable choice.
+
 ## Chapter 7: the consumer's app
 
-What it was all for: the travel app shows its users a trip planner (`just dev`, then http://localhost:<APP_PORT>). The bus line and its timetable come from the provider **through the data space** (the GTFS pulled in chapter 2, under the contract of chapter 4); the places to visit are the travel app's own data. If the timetable was never transferred, `just dev` runs `just flow` first.
+What it was all for: the travel app shows its users a trip planner (`just dev`, then http://localhost:<APP_PORT>). The bus line and its timetable come from the provider **through the data space**, under the contract of chapter 4; the places to visit are the travel app's own data. If there was never a transfer, `just dev` runs `just flow` first.
 
-The app is a static page (`app/index.html`, plain JavaScript drawing SVG, no external library) served by `jwebserver`, Java's built-in web server (`dataspace/consumer-app`). A real app would pull fresh data with its EDR on each refresh instead of from `downloads/`.
+The page (`app/index.html`, plain JavaScript drawing SVG, no external library) is served by `app/Server.java`, a small server on Java's built-in HTTP server (`dataspace/consumer-app` starts it). Each time the page loads, the server pulls the timetable live: it asks the consumer's control plane for the running transfer's EDR, then calls the provider's data plane with the EDR's token, as `just transfer` does. Nothing is read from `downloads/`. If the transfer is no longer running (stopped, or the contract has ended), the server starts a new one (`just transfer`) once. Each answer's `X-Transfer-Process` header names the transfer it used.
 
-`just test` runs everything, in order: `wait`, the flow (onboard, publish, catalog, negotiate, transfer), the trust checks, the usage policies, Gaia-X, the federated catalog, and the app (`consumer-app --check`).
+`just test` runs everything, in order: `wait`, the flow (onboard, publish, catalog, negotiate, transfer), the trust checks, the usage policies, Gaia-X, the federated catalog, and the app (`consumer-app --check`: live data, and a new transfer once the old one is stopped).
 
 ## Kubernetes-ready rules
 

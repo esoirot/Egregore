@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# Checks the Gaia-X layer (run by just test, after onboarding):
+#   1. a partial real configuration is refused and names what is missing (never half real, half mock)
+#   2. a registration number of an unknown type is refused before anything is called
+#   3. the mock notary issues the credential type the real notary issues for each registration type
+#   4. in the mode configured (mock when no GAIAX_* is set), the provider gets a Gaia-X compliance
+#      credential (gx:LabelCredential) into its wallet; in mock mode, issued by the mock, which no
+#      real Gaia-X registry trusts
+# With --lab (needs the internet, not in just test): asks the real GXDCH lab notary for the same
+# registration numbers and checks it answers like the mock (issuer, credential type, subject id).
+set -euo pipefail
+source "$(dirname "$0")/lib.sh"
+
+LAB_NOTARY=https://registrationnumber.notary.lab.gaia-x.eu/v2
+LAB_NOTARY_DID=did:web:registrationnumber.notary.lab.gaia-x.eu:v2
+MOCK_NOTARY=http://gaiax-mock:8080/notary/v2
+# Public registration numbers (GLEIF's own LEI, the notary's EORI and VAT examples) and the type each gets.
+SAMPLES=("lei-code:506700GE1G29325QX363 gx:LeiCode" "eori:FR53740792600014 gx:EORI" "vat-id:BE0762747721 gx:VatID")
+
+# notarize <notary-url> <type:value>: the notary's VC-JWT for a registration number (stdout).
+notarize() {
+    local id=https://example.org/registration-number.json
+    curl -sS --fail-with-body "$1/registration-numbers/${2%%:*}/${2#*:}?vcId=$id&subjectId=$id%23cs"
+}
+
+# decode <jwt> <part>: the JSON of a JWT's header (1) or payload (2).
+decode() {
+    local part
+    part="$(cut -d. -f"$2" <<< "$1" | tr '_-' '/+')"
+    while (( ${#part} % 4 )); do part+="="; done
+    base64 -d <<< "$part"
+}
+
+# check_vc <jwt> <issuer> <type>: the credential comes from that issuer, has that type and our subject id.
+check_vc() {
+    decode "$1" 2 | jq -e --arg iss "$2" --arg type "$3" \
+        '.issuer == $iss and (.type | index($type)) and .credentialSubject.id == "https://example.org/registration-number.json#cs"' > /dev/null
+}
+
+if [[ "${1:-}" == --lab ]]; then
+    for sample in "${SAMPLES[@]}"; do
+        number="${sample% *}" type="${sample#* }"
+        if ! jwt="$(notarize "$LAB_NOTARY" "$number" 2>&1)"; then
+            if grep -q "rate limiting" <<< "$jwt"; then echo "- $number: skipped, the lab notary's registry is rate limited"; continue; fi
+            echo "✗ the lab notary refused $number: $jwt" >&2; exit 1
+        fi
+        check_vc "$jwt" "$LAB_NOTARY_DID" "$type" || { echo "✗ the lab notary's $number credential is not a $type for our subject" >&2; exit 1; }
+        echo "✓ lab notary: $number gives a $type credential, like the mock"
+    done
+    exit 0
+fi
+
+if out="$(GAIAX_DID=did:web:example.org dataspace/gaiax 2>&1)"; then
+    echo "✗ a partial Gaia-X configuration was accepted" >&2; exit 1
+fi
+grep -q "GAIAX_SIGNING_KEY" <<< "$out" || { echo "✗ the refusal does not name the missing variables: $out" >&2; exit 1; }
+echo "✓ partial Gaia-X configuration refused, missing variables listed"
+
+if out="$(GAIAX_DID=x GAIAX_SIGNING_KEY=x GAIAX_CERT_CHAIN_URL=x GAIAX_COMPLIANCE_URL=x GAIAX_NOTARY_URL=x \
+    GAIAX_LEGAL_NAME=x GAIAX_COUNTRY_CODE=x GAIAX_REGISTRATION_NUMBER=passport:123 dataspace/gaiax 2>&1)"; then
+    echo "✗ a registration number of unknown type was accepted" >&2; exit 1
+fi
+grep -q "lei-code" <<< "$out" || { echo "✗ the refusal does not list the registration types: $out" >&2; exit 1; }
+echo "✓ unknown registration number type refused, known types listed"
+
+if [[ -z "${GAIAX_COMPLIANCE_URL:-}" ]]; then
+    mock_did="$(decode "$(notarize "$MOCK_NOTARY" "${SAMPLES[0]% *}")" 1 | jq -r .iss)"
+    for sample in "${SAMPLES[@]}"; do
+        check_vc "$(notarize "$MOCK_NOTARY" "${sample% *}")" "$mock_did" "${sample#* }" \
+            || { echo "✗ the mock notary does not answer ${sample% *} with a ${sample#* } credential" >&2; exit 1; }
+    done
+    echo "✓ the mock notary issues the real notary's credential type for each registration type"
+fi
+
+dataspace/gaiax > /dev/null
+credentials="$(identity_api provider)/provider/credentials"
+label="$(curl -sS --fail-with-body -H "x-api-key: $IDENTITYHUB_KEY" "$credentials" \
+    | jq -c '[.[] | .verifiableCredential.credential | select(.type | index("gx:LabelCredential"))] | last')"
+if [[ "$label" == null ]]; then echo "✗ no Gaia-X compliance credential in the provider's wallet" >&2; exit 1; fi
+issuer="$(jq -r '.issuer.id' <<< "$label")"
+if [[ -z "${GAIAX_COMPLIANCE_URL:-}" ]]; then
+    [[ "$issuer" == did:web:gaiax-mock* ]] || { echo "✗ mock mode, but the credential comes from $issuer" >&2; exit 1; }
+    echo "✓ MOCK: compliance credential in the provider's wallet, issued by $issuer (trusted by no real Gaia-X registry)"
+else
+    echo "✓ REAL: compliance credential in the provider's wallet, issued by $issuer"
+fi

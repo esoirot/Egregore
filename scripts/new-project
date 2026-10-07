@@ -181,7 +181,11 @@ update_project() {
         new="$(hash_of "$render_dir/$file")"
         locked="${LOCKED[$file]:-}"
         if [[ -e "$file" ]]; then
-            [[ -n "$locked" ]] || continue              # the repository's own file
+            if [[ -z "$locked" ]]; then
+                # Identical to the template: from an older template version (not tracked then).
+                if [[ "$(hash_of "$file")" == "$new" ]]; then tracked+=("$file"); fi
+                continue                                # else: the repository's own file
+            fi
             tracked+=("$file")
             [[ "$new" != "$locked" ]] || continue       # template unchanged for this file
             cur="$(hash_of "$file")"
