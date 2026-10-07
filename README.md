@@ -106,13 +106,15 @@ dev-environment/
 │   ├── renovate               # every templates/ renovate: comment yields its version (no Docker)
 │   ├── new-project            # behavior tests for new-project and dev update (stubbed dev, fixture repos),
 │   │                          # template contract, and each templates/<name>/test
+│   ├── check-image-tags       # behavior tests for scripts/check-image-tags (no Docker)
 │   └── dev                    # dev up cleanup, services, host uid ≠ 1000 (real containers)
 │
 ├── scripts/
 │   ├── bootstrap              # host setup (Docker Engine, systemd, docker group)
 │   ├── install                # PATH + build/validate images
 │   ├── new-project            # create a project, adopt a repo (--from), add services (--with), IDE (--ide)
-│   └── dev                    # per-project entry point (up, shell, exec, down, update)
+│   ├── dev                    # per-project entry point (up, shell, exec, down, update)
+│   └── check-image-tags       # CI: an image that changed must get a new tag
 │
 ├── .github/workflows/
 │   └── images.yml             # CI: shellcheck, build + validate images, smoke-test templates
@@ -452,7 +454,7 @@ Template pins outside built-in managers carry a `# renovate: datasource=… depN
 
 Pins that must stay equal go in one PR: all of a template's pins (runtime, starter images, tools) share one PR named `<template> template` (major updates in a separate `major-` one), so CI tests the template as a whole and a new template gets its group with no config change. Outside `templates/`, every file pinning the same dependency shares a PR (Renovate's default). Not tracked, on purpose: the `dev-base` image tag (bump it by hand when the base image changes), the Java major in the java `justfile` (`--java-version`), and apt packages (they follow the pinned base image).
 
-To bump a pin by hand, edit the `FROM` line or version in the relevant file, and bump `IMAGE` in `image.env` when an image changes; `CLAUDE.md` lists where each version lives.
+To bump a pin by hand, edit the `FROM` line or version in the relevant file, and bump `IMAGE` in `image.env` when an image changes (CI fails otherwise: `scripts/check-image-tags origin/main` runs the same check locally); `CLAUDE.md` lists where each version lives.
 
 ---
 

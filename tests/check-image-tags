@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# Behavior tests for scripts/check-image-tags, against throwaway git repositories.
+# Usage: tests/check-image-tags
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CHECK="$REPO_ROOT/scripts/check-image-tags"
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
+# given_repo <dir>: a committed repo with two images; prints the base commit.
+given_repo() {
+    mkdir -p "$1/images/base" "$1/images/cli"
+    git -C "$1" init -q
+    echo "FROM ubuntu" > "$1/images/base/Dockerfile"
+    echo "IMAGE=example/dev-base:1" > "$1/images/base/image.env"
+    echo "FROM docker" > "$1/images/cli/Dockerfile"
+    printf '# tag-guard: off (tag follows the CLI version)\nIMAGE=example/cli:0.89.0\n' > "$1/images/cli/image.env"
+    commit "$1"
+}
+
+commit() {
+    git -C "$1" add -A
+    git -C "$1" -c user.name=test -c user.email=test@example.com commit -q -m change
+    git -C "$1" rev-parse HEAD
+}
+
+PASSED=0
+FAILED=0
+fails() {
+    if "$@"; then return 1; fi
+}
+
+scenario() {
+    local name="$1" rc; shift
+    set +e
+    ( set -euo pipefail; "$@" ) > "$WORK/out" 2>&1
+    rc=$?
+    set -e
+    if [[ "$rc" -eq 0 ]]; then
+        PASSED=$((PASSED + 1)); echo "✓ $name"
+    else
+        FAILED=$((FAILED + 1)); echo "✗ $name"; sed 's/^/    /' "$WORK/out"
+    fi
+}
+
+changed_image_without_tag_fails() {
+    local r="$WORK/r1" base; base="$(given_repo "$r")"
+    echo "RUN true" >> "$r/images/base/Dockerfile"; commit "$r" > /dev/null
+    (cd "$r" && fails "$CHECK" "$base") > "$WORK/r1.out"
+    grep -q "images/base" "$WORK/r1.out"
+}
+
+changed_image_with_tag_passes() {
+    local r="$WORK/r2" base; base="$(given_repo "$r")"
+    echo "RUN true" >> "$r/images/base/Dockerfile"
+    echo "IMAGE=example/dev-base:2" > "$r/images/base/image.env"; commit "$r" > /dev/null
+    (cd "$r" && "$CHECK" "$base")
+}
+
+only_tag_changed_passes() {
+    local r="$WORK/r3" base; base="$(given_repo "$r")"
+    echo "IMAGE=example/dev-base:2" > "$r/images/base/image.env"; commit "$r" > /dev/null
+    (cd "$r" && "$CHECK" "$base")
+}
+
+no_image_changed_passes() {
+    local r="$WORK/r4" base; base="$(given_repo "$r")"
+    echo "docs" > "$r/README.md"; commit "$r" > /dev/null
+    (cd "$r" && "$CHECK" "$base")
+}
+
+new_image_passes() {
+    local r="$WORK/r5" base; base="$(given_repo "$r")"
+    mkdir -p "$r/images/extra"
+    echo "FROM alpine" > "$r/images/extra/Dockerfile"
+    echo "IMAGE=example/extra:1" > "$r/images/extra/image.env"; commit "$r" > /dev/null
+    (cd "$r" && "$CHECK" "$base")
+}
+
+image_env_comment_edit_passes() {
+    local r="$WORK/r8" base; base="$(given_repo "$r")"
+    printf '# Built by install.\nIMAGE=example/dev-base:1\n' > "$r/images/base/image.env"; commit "$r" > /dev/null
+    (cd "$r" && "$CHECK" "$base")
+}
+
+marked_image_is_skipped() {
+    local r="$WORK/r6" base; base="$(given_repo "$r")"
+    echo "RUN true" >> "$r/images/cli/Dockerfile"; commit "$r" > /dev/null
+    (cd "$r" && "$CHECK" "$base")
+}
+
+missing_base_fails() {
+    local r="$WORK/r7"; given_repo "$r" > /dev/null
+    (cd "$r" && fails "$CHECK") > /dev/null 2>&1
+}
+
+scenario "An image changed without a new tag fails and is named" changed_image_without_tag_fails
+scenario "An image changed with a new tag passes" changed_image_with_tag_passes
+scenario "Only the tag changed passes" only_tag_changed_passes
+scenario "No image changed passes" no_image_changed_passes
+scenario "A new image passes" new_image_passes
+scenario "A comment-only edit of image.env passes" image_env_comment_edit_passes
+scenario "An image marked tag-guard: off is skipped" marked_image_is_skipped
+scenario "No base commit is a usage error" missing_base_fails
+
+echo
+echo "$PASSED passed, $FAILED failed"
+[[ "$FAILED" -eq 0 ]]

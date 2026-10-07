@@ -15,9 +15,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # check-image-tags compares with the base commit
       - run: shellcheck --severity=warning scripts/* tests/* images/*/validate images/*/entrypoint templates/*/adopt templates/*/test templates/*/scaffold/.devcontainer/*/install.sh
       - name: Renovate annotations are readable
         run: tests/renovate
+      - name: Changed images have a new tag
+        if: github.event_name != 'workflow_dispatch'
+        run: tests/check-image-tags && scripts/check-image-tags "${{ github.event.pull_request.base.sha || github.event.before }}"
 
   images:
     needs: shellcheck

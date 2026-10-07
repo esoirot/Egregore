@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Fails when an image changed since <base-commit> but its tag (IMAGE in image.env) did not:
+# users would keep an old image under the same tag. Run by CI; run it locally before a PR.
+# An image.env with a "# tag-guard: off" line is skipped (its tag follows an upstream version).
+# Usage: check-image-tags <base-commit>
+set -euo pipefail
+
+BASE="${1:-}"
+[[ -n "$BASE" ]] || { echo "Usage: check-image-tags <base-commit>"; exit 1; }
+cd "$(git rev-parse --show-toplevel)"
+
+FAILED=0
+for DIR in images/*/; do
+    DIR="${DIR%/}"
+    if [[ ! -f "$DIR/image.env" ]] || grep -q '^# tag-guard: off' "$DIR/image.env"; then continue; fi
+    # A new image has no previous tag to compare with.
+    if ! git cat-file -e "$BASE:$DIR/image.env" 2> /dev/null; then continue; fi
+    if [[ -z "$(git diff --name-only "$BASE" -- "$DIR" ":(exclude)$DIR/image.env")" ]]; then continue; fi
+    if [[ "$(git show "$BASE:$DIR/image.env" | grep '^IMAGE=')" == "$(grep '^IMAGE=' "$DIR/image.env")" ]]; then
+        echo "Error: $DIR changed since $BASE but its tag did not. Bump IMAGE in $DIR/image.env."
+        FAILED=1
+    fi
+done
+exit "$FAILED"
