@@ -2,6 +2,18 @@
 
 A mini data space shaped like EONA-X (the European mobility, transport and tourism data space), for learning it layer by layer. It runs the same building blocks: Eclipse Dataspace Components (EDC) connectors speaking the Dataspace Protocol, decentralized identities and credentials, and the Gaia-X Trust Framework. It is **not** EONA-X itself: their production connector, onboarding and rules are not public.
 
+## Start here
+
+From the project folder on the host, `dev up` (the first one builds every image: several minutes). Then, in `dev shell`:
+
+```bash
+just wait     # every runtime up
+just test     # the whole data space, end to end, with every check (a few minutes)
+just dev      # the trip planner on http://localhost:<APP_PORT> (APP_PORT in .env)
+```
+
+Then follow the chapters below one step at a time: each `just` step prints what happened, and its script in `dataspace/` (with the request bodies in `dataspace/requests/`) is the thing to read. To start over from nothing, see "After changing connector code" in chapter 1.
+
 ## The cast
 
 | Participant | Role |
@@ -22,7 +34,7 @@ Each participant runs a **control plane** (catalog, contracts, transfers, its ma
 | 4 | Usage policies (ODRL): purpose, time window | `just negotiate <asset> [purpose]`, `just transfer <asset>` | ready |
 | 5 | Federated catalogue: search every member at once; any participant publishes | `just publish-pois`, `just federated-catalog` | ready |
 | 6 | Gaia-X compliance (mocked unless configured) | `just gaiax` | ready |
-| 7 | Consumer app, full flow test | `just dev`, `just test` | planned |
+| 7 | The consumer's app; the whole data space as one test | `just dev`, `just test` | ready |
 
 ## Chapter 1: connector anatomy
 
@@ -147,6 +159,14 @@ Membership says "the authority knows you". Gaia-X compliance says more: your **l
 Every step leaves its credential in `.dataspace/gaiax/` (decode one: `cut -d. -f2 .dataspace/gaiax/compliance.jwt | base64 -d 2>/dev/null | jq`).
 
 **Mock or real.** Without any `GAIAX_*` variable, the client talks to `gaiax-mock` (the `gaiax-mock` profile in `.env` starts it): offline, but what it signs is trusted by nobody (`gaiax-mock/README.md` says what it checks and what not). For the real GXDCH you need a domain serving your `did.json` over HTTPS, an X.509 certificate chain for your key, a real registration number, and every `GAIAX_*` variable listed in `.env` (a partial set is refused); remove `gaiax-mock` from `COMPOSE_PROFILES`, then `dev down && dev up`. The client code does not change. `just health` says which mode is on.
+
+## Chapter 7: the consumer's app
+
+What it was all for: the travel app shows its users a trip planner (`just dev`, then http://localhost:<APP_PORT>). The bus line and its timetable come from the provider **through the data space** (the GTFS pulled in chapter 2, under the contract of chapter 4); the places to visit are the travel app's own data. If the timetable was never transferred, `just dev` runs `just flow` first.
+
+The app is a static page (`app/index.html`, plain JavaScript drawing SVG, no external library) served by `jwebserver`, Java's built-in web server (`dataspace/consumer-app`). A real app would pull fresh data with its EDR on each refresh instead of from `downloads/`.
+
+`just test` runs everything, in order: `wait`, the flow (onboard, publish, catalog, negotiate, transfer), the trust checks, the usage policies, Gaia-X, the federated catalog, and the app (`consumer-app --check`).
 
 ## Kubernetes-ready rules
 

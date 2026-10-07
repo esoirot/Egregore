@@ -3,3 +3,4 @@ build/
 .env
 .dataspace/
 downloads/
+app/data/

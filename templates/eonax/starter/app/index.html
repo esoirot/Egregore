@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demo Transit trip planner</title>
+<style>
+  :root { --bg: #f7f7f4; --ink: #1f2933; --muted: #6b7280; --line: #2563eb; --stop: #1e3a8a; --poi: #d97706; }
+  body { margin: 0; font: 15px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--ink); }
+  main { max-width: 960px; margin: 0 auto; padding: 24px 16px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.lead { margin: 0 0 16px; color: var(--muted); }
+  svg { width: 100%; height: auto; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 8px 0 16px; color: var(--muted); font-size: 13px; }
+  .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+  .legend .s::before { background: var(--stop); } .legend .p::before { background: var(--poi); }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #e5e7eb; }
+  #error { color: #b91c1c; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Demo Transit trip planner</h1>
+  <p class="lead">The bus line comes from the provider, through the data space (GTFS, pulled with an EDR).
+    The places to visit are the travel app's own data.</p>
+  <div class="legend"><span class="s">bus stops (provider, via the data space)</span><span class="p">places to visit (travel app)</span></div>
+  <p id="error"></p>
+  <svg id="map" viewBox="0 0 900 500" role="img" aria-label="Map of the bus line and places to visit"></svg>
+  <h2>First departures</h2>
+  <table id="departures"><thead><tr><th>Stop</th><th>Trip T1</th><th>Trip T2</th></tr></thead><tbody></tbody></table>
+</main>
+<script>
+// GTFS text files (CSV) -> list of objects keyed by the header row.
+const csv = text => {
+  const [head, ...rows] = text.trim().split(/\r?\n/).map(l => l.split(","));
+  return rows.map(r => Object.fromEntries(head.map((h, i) => [h, r[i]])));
+};
+const get = async (path, parse) => {
+  const response = await fetch(path);
+  if (!response.ok) throw new Error(`${path}: HTTP ${response.status} (run just dev again)`);
+  return parse(await response.text());
+};
+
+(async () => {
+  const [stops, times, pois] = await Promise.all([
+    get("data/stops.txt", csv), get("data/stop_times.txt", csv), get("data/pois.geojson", JSON.parse)]);
+  const places = pois.features.map(f => ({ name: f.properties.name, lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] }));
+  const points = [...stops.map(s => ({ lon: +s.stop_lon, lat: +s.stop_lat })), ...places];
+
+  // Fit every point in the drawing (plain equirectangular projection: fine at city scale).
+  const pad = 60, w = 900, h = 500;
+  const lons = points.map(p => p.lon), lats = points.map(p => p.lat);
+  const [x0, x1, y0, y1] = [Math.min(...lons), Math.max(...lons), Math.min(...lats), Math.max(...lats)];
+  const scale = Math.min((w - 2 * pad) / (x1 - x0), (h - 2 * pad) / (y1 - y0));
+  const xy = p => [pad + (p.lon - x0) * scale, h - pad - (p.lat - y0) * scale];
+
+  const svg = document.getElementById("map");
+  const add = (tag, attrs, text) => {
+    const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
+    if (text) el.textContent = text;
+    svg.appendChild(el);
+  };
+
+  const byId = Object.fromEntries(stops.map(s => [s.stop_id, s]));
+  const trip = times.filter(t => t.trip_id === "T1").sort((a, b) => a.stop_sequence - b.stop_sequence);
+  const route = trip.map(t => xy({ lon: +byId[t.stop_id].stop_lon, lat: +byId[t.stop_id].stop_lat }));
+  add("polyline", { points: route.map(p => p.join(",")).join(" "), fill: "none", stroke: "var(--line)", "stroke-width": 5, "stroke-linecap": "round" });
+  stops.forEach(s => {
+    const [x, y] = xy({ lon: +s.stop_lon, lat: +s.stop_lat });
+    add("circle", { cx: x, cy: y, r: 7, fill: "#fff", stroke: "var(--stop)", "stroke-width": 3 });
+    add("text", { x: x + 10, y: y - 10, "font-size": 14, fill: "var(--stop)" }, s.stop_name);
+  });
+  places.forEach(p => {
+    const [x, y] = xy(p);
+    add("rect", { x: x - 6, y: y - 6, width: 12, height: 12, fill: "var(--poi)", transform: `rotate(45 ${x} ${y})` });
+    add("text", { x: x + 10, y: y + 18, "font-size": 13, fill: "var(--poi)" }, p.name);
+  });
+
+  const body = document.querySelector("#departures tbody");
+  trip.forEach(t => {
+    const t2 = times.find(x => x.trip_id === "T2" && x.stop_id === t.stop_id);
+    body.insertAdjacentHTML("beforeend", `<tr><td>${byId[t.stop_id].stop_name}</td><td>${t.departure_time.slice(0, 5)}</td><td>${t2 ? t2.departure_time.slice(0, 5) : ""}</td></tr>`);
+  });
+})().catch(e => { document.getElementById("error").textContent = e.message; });
+</script>
+</body>
+</html>

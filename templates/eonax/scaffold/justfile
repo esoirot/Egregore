@@ -14,11 +14,12 @@ default:
 install:
     cd connector && gradle --quiet classes
 
-# Show the data space health (the consumer app comes in a later chapter)
-dev: health
+# The consumer's trip planner on port 3000 (host: APP_PORT): data space data next to its own
+dev:
+    dataspace/consumer-app
 
 # Run the connector code's tests, then the data space end to end: the flow, the trust rules, the usage policies
-test *args: flow
+test *args: wait flow
     cd connector && gradle --quiet test {{args}}
     jar tf downloads/gtfs-demo-transit.zip | grep -qx stops.txt
     @echo "✓ the consumer received the provider's GTFS feed"
@@ -29,6 +30,7 @@ test *args: flow
     dataspace/federated-catalog
     jq -e '[.[] | [.dataset // .["dcat:dataset"]] | flatten | map(select(. != null)) | .[]["@id"]] | (index("gtfs-demo-transit") != null and index("tourism-pois") != null)' .dataspace/federated-catalog.json > /dev/null
     @echo "✓ the federated catalog lists both members' offers"
+    dataspace/consumer-app --check
 
 # Compile and run the checks, without tests
 lint:
@@ -83,6 +85,21 @@ flow: onboard publish catalog negotiate transfer
 # Provider: get a Gaia-X compliance credential (mocked unless every GAIAX_* is set)
 gaiax:
     dataspace/gaiax
+
+# Wait (up to 5 minutes) until every runtime answers, e.g. right after dev up
+wait:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for c in {{components}}; do
+        for i in $(seq 1 60); do
+            # readiness or liveness: either says the runtime is up (one of them can be missing, see CLAUDE.md)
+            if curl -sf --max-time 3 "http://$c:8080/api/check/readiness" -o /dev/null \
+                || curl -sf --max-time 3 "http://$c:8080/api/check/liveness" -o /dev/null; then break; fi
+            if [[ $i -eq 60 ]]; then echo "✗ $c did not start: docker compose logs $c (on the host)" >&2; exit 1; fi
+            sleep 5
+        done
+    done
+    echo "✓ every runtime is up"
 
 # Every data space component reports healthy (its readiness probe), and the Gaia-X mode
 health:

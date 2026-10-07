@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# The consumer's app (just dev): a trip planner page on port 3000 (open http://localhost:$APP_PORT).
+# It shows the provider's bus line, obtained through the data space (runs just flow first if the
+# timetable was never transferred), next to the travel app's own places to visit (its poi-backend).
+# Served by jwebserver (Java's built-in static web server). With --check (just test): start it,
+# check it serves the page and the data, stop it.
+set -euo pipefail
+source "$(dirname "$0")/lib.sh"
+
+zip="downloads/$ASSET_ID.zip"
+if [[ ! -s "$zip" ]]; then
+    echo "No timetable yet: running the data space flow first (just flow)."
+    just flow > /dev/null
+fi
+mkdir -p app/data
+(cd app/data && jar xf "../../$zip")
+curl -sS --fail-with-body http://poi-backend:8000/pois.geojson -o app/data/pois.geojson
+echo "Data ready: the bus line from $zip, the places to visit from poi-backend."
+
+if [[ "${1:-}" != --check ]]; then
+    echo "Trip planner: http://localhost:${APP_PORT:-3000} (Ctrl+C to stop)"
+    exec jwebserver -b 0.0.0.0 -p 3000 -d "$PWD/app"
+fi
+
+jwebserver -b 127.0.0.1 -p 3000 -d "$PWD/app" > /dev/null 2>&1 &
+server=$!
+trap 'kill "$server" 2> /dev/null' EXIT
+for _ in $(seq 1 20); do
+    if curl -sf http://127.0.0.1:3000/ -o /dev/null; then break; fi
+    sleep 0.5
+done
+for path in / data/stops.txt data/stop_times.txt data/pois.geojson; do
+    curl -sSf "http://127.0.0.1:3000/${path#/}" -o /dev/null || { echo "✗ the app does not serve /${path#/}" >&2; exit 1; }
+done
+echo "✓ the trip planner serves its page, the provider's timetable and its own places"
