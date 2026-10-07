@@ -46,6 +46,11 @@ x-controlplane-env: &controlplane-env
   # The policy monitor re-checks running transfers against their contract (e.g. its end date):
   # every 10 s here, to see it act; EDC's default is 1 hour.
   EDC_POLICY_MONITOR_PERIOD: PT10S
+  # Federated catalog: every control plane crawls the members' catalogs into its own cache
+  # (query: /management/v3/catalogs/request). Members by DID; their DID documents say where to crawl.
+  EONAX_CATALOG_PARTICIPANTS: did:web:provider-identityhub%3A7083:provider,did:web:consumer-identityhub%3A7083:consumer
+  EDC_CATALOG_CACHE_EXECUTION_DELAY_SECONDS: "10"
+  EDC_CATALOG_CACHE_EXECUTION_PERIOD_SECONDS: "15"
   # Trust (DCP): only credentials signed by the authority count...
   EDC_IAM_TRUSTED-ISSUER_AUTHORITY_ID: did:web:issuerservice%3A10016:issuer
   # ...and every request asks the other side to present its MembershipCredential.
@@ -131,6 +136,16 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/gtfs.zip')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # The consumer's own system holding its data (it offers it to the other members too).
+  poi-backend:
+    build: poi-backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/pois.geojson')"]
       interval: 5s
       timeout: 3s
       retries: 10

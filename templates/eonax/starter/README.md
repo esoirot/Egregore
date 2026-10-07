@@ -20,7 +20,7 @@ Each participant runs a **control plane** (catalog, contracts, transfers, its ma
 | 2 | Publish, catalog, negotiate, transfer (Dataspace Protocol) | `just publish`, `catalog`, `negotiate`, `transfer` | ready |
 | 3 | Identity and trust: `did:web`, Identity Hub, Issuer Service, membership credential | `just authority`, `identity`, `membership` (all: `just onboard`) | ready |
 | 4 | Usage policies (ODRL): purpose, time window | `just negotiate <asset> [purpose]`, `just transfer <asset>` | ready |
-| 5 | Federated catalogue | `just catalog` | planned |
+| 5 | Federated catalogue: search every member at once; any participant publishes | `just publish-pois`, `just federated-catalog` | ready |
 | 6 | Gaia-X compliance (mocked unless configured) | `just gaiax` | planned |
 | 7 | Consumer app, full flow test | `just dev`, `just test` | planned |
 
@@ -38,6 +38,7 @@ Each participant runs a **control plane** (catalog, contracts, transfers, its ma
 | `vault` | 8200 | secrets: keys and tokens, one folder per participant; data in a named volume |
 | `vault-seed` | — | one-shot job at each `dev up`: initializes (first time) and unseals Vault, puts the encryption and transfer token keys in it |
 | `gtfs-backend` | 8000 | the provider's own system holding the timetable; not part of the data space |
+| `poi-backend` | 8000 | the consumer's own system holding its tourist points of interest (it offers them too) |
 
 From `dev shell`:
 
@@ -116,6 +117,19 @@ Try them:
 * `just negotiate gtfs-30s`, then `just transfer gtfs-30s`: valid for 30 s after signing. The transfer starts; within about 10 s after the end, the provider's **policy monitor** (`EDC_POLICY_MONITOR_PERIOD`, here every 10 s, EDC's default is 1 hour) terminates it, and the EDR token you got stops working (HTTP 403): enforcement is technical here.
 
 `dataspace/check-policies` runs these three checks (part of `just test`).
+
+## Chapter 5: federated catalogue
+
+`just catalog` asks one participant. In a data space of hundreds you search everyone at once: each control plane runs a **federated catalog crawler** that collects the members' catalogs into a local cache (every 15 s here), and you query the cache.
+
+| Step | Who | What happens | Read |
+| --- | --- | --- | --- |
+| `just publish-pois` | consumer | any participant can provide: the travel app offers its tourist points of interest (GeoJSON, from its own `poi-backend`), members only, from its own control plane | `dataspace/publish-pois`, `requests/asset-pois.json`, `contract-definition-pois.json` |
+| `just federated-catalog` | consumer | queries its crawled cache: every member's offers in one answer (`/management/v3/catalogs/request`) | `dataspace/federated-catalog`, `.dataspace/federated-catalog.json` |
+
+Who gets crawled: the members' **DIDs** (`EONAX_CATALOG_PARTICIPANTS`). Our `MemberDirectoryExtension` (`connector/controlplane/src/`) resolves each DID at every crawl and takes its `ProtocolEndpoint` from the DID document (set by `just identity`): no address is configured anywhere, and a member that joins later shows up by itself. A real data space would read the member list from a registry instead of a setting.
+
+The crawler asks each member like any consumer would, over DCP: it only sees what its credentials allow (`gtfs-partners-only` stays hidden here too).
 
 ## Kubernetes-ready rules
 

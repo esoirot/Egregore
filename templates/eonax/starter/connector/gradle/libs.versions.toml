@@ -24,6 +24,8 @@ edc-bom-issuerservice = { module = "org.eclipse.edc:issuerservice-bom", version.
 edc-bom-issuerservice-sql = { module = "org.eclipse.edc:issuerservice-feature-sql-bom", version.ref = "edc" }
 edc-issuance-spi = { module = "org.eclipse.edc:issuerservice-issuance-spi", version.ref = "edc" }
 edc-participant-context-spi = { module = "org.eclipse.edc:participant-context-spi", version.ref = "edc" }
+edc-crawler-spi = { module = "org.eclipse.edc:crawler-spi", version.ref = "edc" }
+edc-identity-did-spi = { module = "org.eclipse.edc:identity-did-spi", version.ref = "edc" }
 edc-did-api = { module = "org.eclipse.edc:did-api", version.ref = "edc" }
 edc-participant-context-api = { module = "org.eclipse.edc:participant-context-api", version.ref = "edc" }
 edc-participant-context-config-store-sql = { module = "org.eclipse.edc:participantcontext-config-store-sql", version.ref = "edc" }

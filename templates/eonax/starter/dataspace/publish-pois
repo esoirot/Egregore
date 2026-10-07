@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Consumer as a provider: the travel app offers its tourist points of interest to the other members.
+# Any participant can publish: same objects as dataspace/publish, in the consumer's own control plane
+# (its own CEL expression and members-only policy, its own asset pointing at its own backend).
+set -euo pipefail
+source "$(dirname "$0")/lib.sh"
+
+key="X-Api-Key: ${CONSUMER_API_KEY:-consumer-api-key}"
+create "$CONSUMER_MANAGEMENT/v5beta/celexpressions" "$key" "$(cat "$REQUESTS/cel-membership.json")" cel-membership.json
+create "$CONSUMER_MANAGEMENT/v3/policydefinitions" "$key" "$(cat "$REQUESTS/policy.json")" policy.json
+create "$CONSUMER_MANAGEMENT/v3/assets" "$key" "$(cat "$REQUESTS/asset-pois.json")" asset-pois.json
+create "$CONSUMER_MANAGEMENT/v3/contractdefinitions" "$key" "$(cat "$REQUESTS/contract-definition-pois.json")" contract-definition-pois.json
+echo "The consumer offers 'tourism-pois' to members. Next: just federated-catalog"

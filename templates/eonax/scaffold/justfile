@@ -24,6 +24,10 @@ test *args: flow
     @echo "✓ the consumer received the provider's GTFS feed"
     dataspace/check-trust
     dataspace/check-policies
+    dataspace/publish-pois > /dev/null
+    dataspace/federated-catalog
+    jq -e '[.[] | [.dataset // .["dcat:dataset"]] | flatten | map(select(. != null)) | .[]["@id"]] | (index("gtfs-demo-transit") != null and index("tourism-pois") != null)' .dataspace/federated-catalog.json > /dev/null
+    @echo "✓ the federated catalog lists both members' offers"
 
 # Compile and run the checks, without tests
 lint:
@@ -63,6 +67,14 @@ negotiate asset="gtfs-demo-transit" purpose="":
 # Consumer: transfer under the contract and pull the data (into downloads/<asset>.zip)
 transfer asset="gtfs-demo-transit":
     dataspace/transfer {{asset}}
+
+# Consumer as a provider: offer its tourist points of interest to the members
+publish-pois:
+    dataspace/publish-pois
+
+# Search the whole data space: the consumer's federated catalog (crawled from every member)
+federated-catalog:
+    dataspace/federated-catalog
 
 # The whole flow: onboard, publish, catalog, negotiate, transfer
 flow: onboard publish catalog negotiate transfer
