@@ -428,7 +428,7 @@ dev down && dev up
 * **edited by you** → kept; the new version is written next to it as `<file>.template-new` and listed as a conflict (if the template did not change that file, nothing happens)
 * **new in the template** → added
 * **deleted by you** → stays deleted
-* **not recorded, but identical to the template's version** → recorded from now on (a file the template only started tracking later, e.g. `eonax` course material once in `starter/`); a different one stays the repository's own
+* **not recorded** (the repository's own file) → left alone
 
 The `adopt` hook runs again, so versions and build tools taken from the repository (`.ruby-version`, `pom.xml`, …) are kept. `starter/` files (the sample app) are yours after creation and never updated. A template whose sample code must follow template fixes (`eonax`: connector, course scripts, app, README) keeps it in `scaffold/` instead. Projects created before `template.lock` existed must be updated by hand.
 

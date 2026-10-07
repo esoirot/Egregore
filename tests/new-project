@@ -646,20 +646,6 @@ update_without_lock_explains() {
     cmp "$WORK/upd7-compose" "$p/compose.yaml"
 }
 
-# A project made before a file was tracked (e.g. eonax course material, once a starter file).
-update_tracks_untracked_file_identical_to_template() {
-    local sb="$WORK/sb-identical"; make_sandbox "$sb"
-    "$sb/scripts/new-project" node upd8
-    local p="$PROJECTS_DIR/upd8"
-    sed -i '/ justfile$/d' "$p/.devcontainer/template.lock"
-    (cd "$p" && "$sb/scripts/dev.real" update) > /dev/null
-    grep -q " justfile$" "$p/.devcontainer/template.lock"
-    echo "# template fix" >> "$sb/templates/node/scaffold/justfile"
-    (cd "$p" && "$sb/scripts/dev.real" update) > "$WORK/upd8.out"
-    grep -qx "# template fix" "$p/justfile"
-    grep -q "justfile" "$WORK/upd8.out"
-}
-
 update_leaves_untracked_file_that_differs() {
     local sb="$WORK/sb-differs"; make_sandbox "$sb"
     make_repo "$WORK/src/upd9" ".gitignore=mine" "package.json={}"
@@ -730,7 +716,6 @@ scenario "dev update keeps adopted settings" update_keeps_adopted_settings
 scenario "dev update adds new files and respects deletions" update_adds_new_files_and_respects_deletions
 scenario "dev update keeps services and IDE settings" update_keeps_services_and_ide
 scenario "dev update without a lock explains and changes nothing" update_without_lock_explains
-scenario "dev update tracks an untracked file identical to the template" update_tracks_untracked_file_identical_to_template
 scenario "dev update leaves an untracked file that differs" update_leaves_untracked_file_that_differs
 
 # Each template's own scenarios (adopt, env-skip), kept next to it in templates/<name>/test.
