@@ -363,7 +363,11 @@ shared_files_reach_every_template() {
             # A template with its own services (compose.template.yaml) adds an include: block on top.
             [[ "$(awk 'NR == 1 && /^include:$/ { skip = 1 } skip { if (/^$/) skip = 0; next } 1' "$PROJECTS_DIR/shared-$t/$f")" == \
                "$(sed -e "s|{{PROJECT_NAME}}|shared-$t|g" -e "s|{{IMAGE}}|$BASE_IMAGE|g" \
-                      -e "s|{{PORT}}|$(template_port "$SANDBOX/templates/$t")|g" "$SANDBOX/templates/_shared/$f")" ]] \
+                      -e "s|{{PORT}}|$(template_port "$SANDBOX/templates/$t")|g" "$SANDBOX/templates/_shared/$f"
+                  # a template's own variables (templates/<name>/env) follow the shared ones
+                  if [[ "$f" == .env.example && -f "$SANDBOX/templates/$t/env" ]]; then
+                      printf '\n# %s template\n' "$t"; cat "$SANDBOX/templates/$t/env"
+                  fi)" ]] \
                 || { echo "$t: $f differs from templates/_shared/$f"; return 1; }
         done
     done
