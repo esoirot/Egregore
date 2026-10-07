@@ -466,6 +466,7 @@ A template is a `templates/<name>/` directory with a `scaffold/` and, usually, a
 templates/go/
 ├── scaffold/                 # dev environment, always copied (on top of templates/_shared/)
 │   ├── .devcontainer/devcontainer.json
+│   ├── compose.template.yaml # optional, the template's own services (included by compose.yaml)
 │   ├── justfile
 │   └── .gitignore
 ├── starter/                  # sample project, new projects only
@@ -486,6 +487,7 @@ Start from `templates/node/` and change:
 * `compose.yaml` and `.env.example` come from `templates/_shared/`. The app listens on port 3000 in the container; if the stack needs another port, write it in an optional `port` file (one number, e.g. `8000`) and use `{{PORT}}` in the `dev` recipe. The host side stays `APP_PORT` (default 3000).
 * `starter/`: a minimal working app with a test, the production `Dockerfile` stub, the README. Files that only fit the sample app belong here, not in `scaffold/`.
 * optional `adopt` (executable): called as `adopt <project-dir>` by `new-project` (only when it copied `devcontainer.json`) and by `dev update`, to match the feature version to the repository's version file (see `templates/rails/adopt`) or its build tool (see `templates/java/adopt`). It must be idempotent.
+* optional `scaffold/compose.template.yaml`: services the stack needs besides `dev` (e.g. the components of a multi-container system). `new-project` adds it to the project's `include:` (before `--with` services); placeholders work in it, and `dev update` tracks it. Keep `compose.yaml` itself shared.
 * optional `test`: given/when/then scenarios for `adopt` (and `env-skip`), sourced by `tests/new-project`; see `templates/java/test`.
 * `vscode-extensions`: one VS Code extension id per line, for `--ide=vscode`.
 * optional `env-skip`: service variables (from `services/*/env`) not to write into this template's projects (see `templates/rails/env-skip`).

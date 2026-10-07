@@ -394,6 +394,45 @@ update_brings_shared_fix_to_every_template() {
     done
 }
 
+# --- template services (scaffold/compose.template.yaml) -----------------------
+
+# given_template_services <sandbox>: the node template gets an extra service.
+given_template_services() {
+    printf 'services:\n  extra:\n    image: {{IMAGE}}\n    command: sleep infinity\n    labels:\n      project: {{PROJECT_NAME}}\n' \
+        > "$1/templates/node/scaffold/compose.template.yaml"
+}
+
+template_services_are_included() {
+    local sb="$WORK/sb-tsvc"; make_sandbox "$sb"; given_template_services "$sb"
+    "$sb/scripts/new-project" node tsvc
+    local p="$PROJECTS_DIR/tsvc"
+    grep -qx '  - compose.template.yaml' "$p/compose.yaml"
+    grep -q "image: $BASE_IMAGE" "$p/compose.template.yaml"
+    grep -q "project: tsvc" "$p/compose.template.yaml"
+    grep -qE "^file [0-9a-f]{64} compose.template.yaml$" "$p/.devcontainer/template.lock"
+    [[ "$(docker compose -f "$p/compose.yaml" config --services | sort | paste -sd' ')" == "dev extra" ]]
+}
+
+template_services_come_before_with_services() {
+    local sb="$WORK/sb-tsvc2"; make_sandbox "$sb"; given_template_services "$sb"
+    "$sb/scripts/new-project" node tsvc2 --with redis
+    [[ "$(sed -n '/^include:/,/^$/p' "$PROJECTS_DIR/tsvc2/compose.yaml")" == \
+       "$(printf 'include:\n  - compose.template.yaml\n  - compose.redis.yaml\n')" ]]
+}
+
+update_brings_template_services_change() {
+    local sb="$WORK/sb-tsvc3"; make_sandbox "$sb"; given_template_services "$sb"
+    "$sb/scripts/new-project" node tsvc3
+    echo "    init: true" >> "$sb/templates/node/scaffold/compose.template.yaml"
+    (cd "$PROJECTS_DIR/tsvc3" && "$sb/scripts/dev.real" update) > /dev/null
+    grep -qx "    init: true" "$PROJECTS_DIR/tsvc3/compose.template.yaml"
+}
+
+no_template_services_no_include() {
+    "$NEW_PROJECT" node notsvc
+    fails grep -q '^include:' "$PROJECTS_DIR/notsvc/compose.yaml"
+}
+
 # --- host port (APP_PORT) -----------------------------------------------------
 # Each scenario gets its own projects folder: every project's .env claims a port.
 
@@ -615,6 +654,10 @@ scenario "Shared scaffold files reach every template" shared_files_reach_every_t
 scenario "A template's own file wins over the shared one" template_file_wins_over_shared
 scenario "_shared is not a template" shared_is_not_a_template
 scenario "dev update brings a shared fix to every template" update_brings_shared_fix_to_every_template
+scenario "A template's own services are included" template_services_are_included
+scenario "Template services come before --with services" template_services_come_before_with_services
+scenario "dev update brings a template services change" update_brings_template_services_change
+scenario "No template services, no include" no_template_services_no_include
 scenario "A port claimed by a stopped project is skipped" port_claimed_by_stopped_project_is_skipped
 scenario "A port in use on the host is skipped" port_in_use_on_host_is_skipped
 scenario "An explicit APP_PORT is used even if taken" explicit_app_port_is_used_even_if_taken

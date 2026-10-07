@@ -61,22 +61,26 @@ render() {
     fi
     find "$out" -type f -exec sed -i -e "s|{{PROJECT_NAME}}|$name|g" -e "s|{{IMAGE}}|$IMAGE|g" -e "s|{{PORT}}|$port|g" {} +
 
-    if [[ -n "$services" ]]; then
+    # The template's own services (scaffold/compose.template.yaml), then --with services.
+    local includes=()
+    if [[ -f "$out/compose.template.yaml" ]]; then includes+=(compose.template.yaml); fi
+    for svc in ${services//,/ }; do includes+=("compose.$svc.yaml"); done
+    if [[ ${#includes[@]} -gt 0 ]]; then
         {
             echo "include:"
-            for svc in ${services//,/ }; do echo "  - compose.$svc.yaml"; done
+            printf '  - %s\n' "${includes[@]}"
             echo
             cat "$out/compose.yaml"
         } > "$out/compose.yaml.new"
         mv "$out/compose.yaml.new" "$out/compose.yaml"
-        for svc in ${services//,/ }; do
-            cp "$SERVICES_DIR/$svc/compose.yaml" "$out/compose.$svc.yaml"
-            if [[ -f "$out/.env.example" ]]; then
-                printf '\n# %s (new-project --with)\n' "$svc" >> "$out/.env.example"
-                service_env "$template" "$svc" >> "$out/.env.example"
-            fi
-        done
     fi
+    for svc in ${services//,/ }; do
+        cp "$SERVICES_DIR/$svc/compose.yaml" "$out/compose.$svc.yaml"
+        if [[ -f "$out/.env.example" ]]; then
+            printf '\n# %s (new-project --with)\n' "$svc" >> "$out/.env.example"
+            service_env "$template" "$svc" >> "$out/.env.example"
+        fi
+    done
 
     if [[ "$ide" == vscode ]]; then
         json="$out/.devcontainer/devcontainer.json"
