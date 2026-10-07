@@ -128,6 +128,7 @@ app_port_with_repo_env_example() {
 }
 
 app_port_defaults_when_repo_example_lacks_it() {
+    own_projects_dir envd
     make_repo "$WORK/src/envd" ".env.example=FOO=bar" "Gemfile=x"
     "$NEW_PROJECT" rails envd --from "$WORK/src/envd"
     grep -qx "APP_PORT=3000" "$PROJECTS_DIR/envd/.env"
@@ -233,9 +234,11 @@ services_with_adopted_repo() {
 }
 
 env_reaches_the_container() {
-    "$NEW_PROJECT" fastapi envc
+    own_projects_dir envc
+    make_repo "$WORK/src/envc" ".env.example=APP_PORT=3640"
+    "$NEW_PROJECT" fastapi envc --from "$WORK/src/envc"
     docker compose -f "$PROJECTS_DIR/envc/compose.yaml" config --format json \
-        | python3 -c 'import json,sys; assert json.load(sys.stdin)["services"]["dev"]["environment"]["APP_PORT"] == "3000"'
+        | python3 -c 'import json,sys; assert json.load(sys.stdin)["services"]["dev"]["environment"]["APP_PORT"] == "3640"'
 }
 
 ide_vscode_adds_extensions_and_opens() {
@@ -389,6 +392,70 @@ update_brings_shared_fix_to_every_template() {
         (cd "$PROJECTS_DIR/$p" && "$sb/scripts/dev.real" update) > /dev/null
         grep -qx "# shared fix" "$PROJECTS_DIR/$p/compose.yaml"
     done
+}
+
+# --- host port (APP_PORT) -----------------------------------------------------
+# Each scenario gets its own projects folder: every project's .env claims a port.
+
+own_projects_dir() {
+    export PROJECTS_DIR="$WORK/ports-$1"
+    mkdir -p "$PROJECTS_DIR"
+}
+
+# listen_on <port>: hold the port on 127.0.0.1 until the scenario ends (prints the pid).
+listen_on() {
+    python3 -c 'import socket, sys, time
+s = socket.socket(); s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(); time.sleep(60)' "$1" > /dev/null 2>&1 &
+    echo $!
+    sleep 0.3
+}
+
+port_claimed_by_stopped_project_is_skipped() {
+    own_projects_dir claim
+    make_repo "$WORK/src/claim" ".env.example=APP_PORT=3610" "package.json={}"
+    "$NEW_PROJECT" node claim1 --from "$WORK/src/claim"
+    "$NEW_PROJECT" node claim2 --from "$WORK/src/claim" > "$WORK/claim.out"
+    grep -qx "APP_PORT=3610" "$PROJECTS_DIR/claim1/.env"
+    grep -qx "APP_PORT=3611" "$PROJECTS_DIR/claim2/.env"
+    grep -q "3611 (3610 is taken)" "$WORK/claim.out"
+}
+
+port_in_use_on_host_is_skipped() {
+    own_projects_dir listen
+    local pid; pid="$(listen_on 3620)"
+    make_repo "$WORK/src/listen" ".env.example=APP_PORT=3620" "package.json={}"
+    "$NEW_PROJECT" node listen --from "$WORK/src/listen"
+    kill "$pid"
+    grep -qx "APP_PORT=3621" "$PROJECTS_DIR/listen/.env"
+}
+
+explicit_app_port_is_used_even_if_taken() {
+    own_projects_dir explicit
+    local pid; pid="$(listen_on 3630)"
+    APP_PORT=3630 "$NEW_PROJECT" node explicit
+    kill "$pid"
+    grep -qx "APP_PORT=3630" "$PROJECTS_DIR/explicit/.env"
+}
+
+repo_own_env_port_is_kept() {
+    own_projects_dir ownenv
+    make_repo "$WORK/src/claimer" ".env.example=APP_PORT=4000" "package.json={}"
+    "$NEW_PROJECT" node claimer --from "$WORK/src/claimer"
+    make_repo "$WORK/src/ownenv" ".env=APP_PORT=4000" "package.json={}"
+    "$NEW_PROJECT" node ownenv --from "$WORK/src/ownenv"
+    grep -qx "APP_PORT=4000" "$PROJECTS_DIR/ownenv/.env"
+}
+
+no_free_port_leaves_project_stopped_with_hint() {
+    own_projects_dir full
+    local i
+    for i in $(seq 0 999); do
+        mkdir -p "$PROJECTS_DIR/other$i"; echo "APP_PORT=$((3700 + i))" > "$PROJECTS_DIR/other$i/.env"
+    done
+    make_repo "$WORK/src/full" ".env.example=APP_PORT=3700" "package.json={}"
+    fails "$NEW_PROJECT" node full --from "$WORK/src/full" > "$WORK/full.out" 2>&1
+    grep -q "APP_PORT" "$WORK/full.out"
+    fails grep -q "^$PROJECTS_DIR/full up" "$DEV_LOG"
 }
 
 # --- app port (templates/<name>/port) ---------------------------------------
@@ -548,6 +615,11 @@ scenario "Shared scaffold files reach every template" shared_files_reach_every_t
 scenario "A template's own file wins over the shared one" template_file_wins_over_shared
 scenario "_shared is not a template" shared_is_not_a_template
 scenario "dev update brings a shared fix to every template" update_brings_shared_fix_to_every_template
+scenario "A port claimed by a stopped project is skipped" port_claimed_by_stopped_project_is_skipped
+scenario "A port in use on the host is skipped" port_in_use_on_host_is_skipped
+scenario "An explicit APP_PORT is used even if taken" explicit_app_port_is_used_even_if_taken
+scenario "A repository's own .env keeps its APP_PORT" repo_own_env_port_is_kept
+scenario "No free port: project left stopped with a hint" no_free_port_leaves_project_stopped_with_hint
 scenario "A port file sets the app's container port" port_file_sets_container_port
 scenario "An invalid port file fails without creating anything" invalid_port_fails_and_creates_nothing
 scenario "dev update brings a template port change" update_brings_port_change

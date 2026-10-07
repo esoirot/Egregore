@@ -219,7 +219,7 @@ Projects go to `~/projects/` by default:
 PROJECTS_DIR=~/work new-project node my-poc
 ```
 
-`new-project` copies the template's `scaffold/` and `starter/`, fills in the placeholders, creates `.env` from `.env.example`, and runs `dev up`. If port 3000 is already used on the host, pick another one up front:
+`new-project` copies the template's `scaffold/` and `starter/`, fills in the placeholders, creates `.env` from `.env.example`, and runs `dev up`. The host port (`APP_PORT` in `.env`) is the first free one from 3000: a port something listens on, or that another project in `~/projects` claims in its `.env` (even stopped), is skipped, and `new-project` prints the one it picked. To choose it yourself (used as given):
 
 ```bash
 APP_PORT=3100 new-project node my-poc
@@ -263,7 +263,7 @@ It clones the repository into `~/projects/my-app`, then adds the template's dev 
 * **Generators never run over existing code**: `rails new` is skipped when a `Gemfile` exists, `gradle init` when any Gradle or Maven build exists.
 * **Build tool follows the repository**: for a `pom.xml` build, the `java` recipes switch to Maven (`./mvnw` if the repository has the wrapper, otherwise `mvn`, installed through the java feature). `just dev` runs `spring-boot:run` for Spring Boot; for other Maven apps it explains how to set the main class.
 * **FastAPI app location is discovered**: `just dev` finds the app in `main.py`, `app.py`, `api.py` or `app/{main,app,api}.py`, and `just build` byte-compiles the whole project. A repository with only `requirements.txt` (no `pyproject.toml`) gets pip-style recipes: `uv venv` + `uv pip install -r requirements.txt` (and `requirements-dev.txt`), ruff run through `uvx`.
-* **`.env`** is created from `.env.example` if missing, and `APP_PORT` is added if the repository's example lacks it.
+* **`.env`** is created from `.env.example` if missing, and `APP_PORT` is set: the repository's own `.env` value if it has one, else the first free port from its example's value (or 3000).
 * The copied files are listed at the end. They stay **untracked**: commit them if the team adopts this setup, or list them in `.git/info/exclude` to keep them local.
 
 Still manual: other app layouts (for example a FastAPI app outside the discovered paths, or a non-Spring Maven app: edit the `dev` recipe). A repository that ships its own `compose.yaml` keeps it, so `--with` cannot wire services into it.
@@ -312,7 +312,7 @@ ports:
 
 `.env` is loaded into the dev container (`env_file`), so every process sees its variables, not only `just` recipes. After editing `.env`, run `dev down && dev up`.
 
-Open `http://localhost:3000` from Windows. To run several POCs at once, set a different `APP_PORT` in each project's `.env` (created by `new-project` from `.env.example`).
+Open `http://localhost:<APP_PORT>` from Windows (3000 for the first project). Each project gets its own free `APP_PORT` at creation, so several POCs run at once; change it in the project's `.env`, then `dev down && dev up`.
 
 If `dev up` fails (for example "port is already allocated"), it removes the half-created container and says so. Set another `APP_PORT` in `.env` and run `dev up` again.
 

@@ -108,6 +108,11 @@ starter_files() {
     fi
 }
 
+# port_taken <port>: something listens on it, or another project claims it (CLAIMED).
+port_taken() {
+    [[ -v CLAIMED[$1] ]] || (exec 3<> "/dev/tcp/127.0.0.1/$1") 2> /dev/null
+}
+
 hash_of() {
     sha256sum "$1" | cut -d' ' -f1
 }
@@ -334,18 +339,39 @@ write_lock "$TEMPLATE" "$PROJECT_NAME" "$SERVICES" "$IDE" "${TRACKED[@]}"
 
 echo "Created $TEMPLATE project: $PROJECT_ROOT"
 
-# Seed .env so the host port is set before the first dev up (APP_PORT=<port> new-project ...).
+# Seed .env so the host port is set before the first dev up. The port: APP_PORT=<port> new-project ...
+# as given, else the repository's own .env, else the first free one from the example's value (3000).
+REPO_ENV_PORT=""
+if [[ -f .env ]]; then REPO_ENV_PORT="$(sed -n 's/^APP_PORT=//p' .env | tail -1)"; fi
 if [[ ! -f .env && -f .env.example ]]; then
     cp .env.example .env
 fi
 touch .env
-if grep -q '^APP_PORT=' .env; then
-    if [[ -n "${APP_PORT:-}" ]]; then
-        sed -i "s|^APP_PORT=.*|APP_PORT=$APP_PORT|" .env
+NO_FREE_PORT=""
+PORT="${APP_PORT:-$REPO_ENV_PORT}"
+if [[ -z "$PORT" ]]; then
+    START="$(sed -n 's/^APP_PORT=\([0-9]*\)$/\1/p' .env | tail -1)"
+    START="${START:-3000}"
+    # Ports in other projects' .env files: a stopped project keeps its port.
+    declare -A CLAIMED=()
+    for ENV in "$PROJECTS_DIR"/*/.env; do
+        if [[ "$ENV" == "$PWD/.env" || ! -f "$ENV" ]]; then continue; fi
+        for P in $(sed -n 's/^APP_PORT=//p' "$ENV"); do CLAIMED[$P]=1; done
+    done
+    PORT="$START"
+    while port_taken "$PORT"; do
+        PORT=$((PORT + 1))
+        if (( PORT >= START + 1000 )); then NO_FREE_PORT="$START-$((PORT - 1))"; PORT="$START"; break; fi
+    done
+    if [[ -z "$NO_FREE_PORT" && "$PORT" != "$START" ]]; then
+        echo "App port on the host: $PORT ($START is taken)"
     fi
+fi
+if grep -q '^APP_PORT=' .env; then
+    sed -i "s|^APP_PORT=.*|APP_PORT=$PORT|" .env
 else
     [[ -z "$(tail -c 1 .env)" ]] || echo >> .env
-    echo "APP_PORT=${APP_PORT:-3000}" >> .env
+    echo "APP_PORT=$PORT" >> .env
 fi
 # Service variables the .env does not have yet (an adopted repo's own .env.example lacks them).
 for SVC in ${SERVICES//,/ }; do
@@ -358,6 +384,13 @@ if [[ -n "$FROM_REPO" ]]; then
     echo
     echo "Added from the $TEMPLATE template (untracked in the repository; commit them or not):"
     printf '  %s\n' "${ADDED[@]}"
+fi
+
+if [[ -n "$NO_FREE_PORT" ]]; then
+    echo
+    echo "Error: no free host port in $NO_FREE_PORT (in use, or claimed by projects in $PROJECTS_DIR)."
+    echo "The project is created but not started: set a free APP_PORT in $PROJECT_ROOT/.env, then run dev up there."
+    exit 1
 fi
 
 "$REPO_ROOT/scripts/dev" up
