@@ -437,6 +437,27 @@ no_template_services_no_include() {
     fails grep -q '^include:' "$PROJECTS_DIR/notsvc/compose.yaml"
 }
 
+# --- template variables (templates/<name>/env) -------------------------------
+
+template_env_reaches_env_example_and_env() {
+    local sb="$WORK/sb-tenv"; make_sandbox "$sb"
+    printf 'FEATURE_FLAG=on\n' > "$sb/templates/node/env"
+    "$sb/scripts/new-project" node tenv
+    local p="$PROJECTS_DIR/tenv" f
+    for f in .env.example .env; do
+        grep -qx "FEATURE_FLAG=on" "$p/$f" || { echo "missing in $f"; return 1; }
+    done
+}
+
+update_brings_template_env_change() {
+    local sb="$WORK/sb-tenv2"; make_sandbox "$sb"
+    printf 'FEATURE_FLAG=on\n' > "$sb/templates/node/env"
+    "$sb/scripts/new-project" node tenv2
+    printf 'OTHER=1\n' >> "$sb/templates/node/env"
+    (cd "$PROJECTS_DIR/tenv2" && "$sb/scripts/dev.real" update) > /dev/null
+    grep -qx "OTHER=1" "$PROJECTS_DIR/tenv2/.env.example"
+}
+
 # --- host port (APP_PORT) -----------------------------------------------------
 # Each scenario gets its own projects folder: every project's .env claims a port.
 
@@ -662,6 +683,8 @@ scenario "A template's own services are included" template_services_are_included
 scenario "Template services come before --with services" template_services_come_before_with_services
 scenario "dev update brings a template services change" update_brings_template_services_change
 scenario "No template services, no include" no_template_services_no_include
+scenario "A template's own variables reach .env.example and .env" template_env_reaches_env_example_and_env
+scenario "dev update brings a template variables change" update_brings_template_env_change
 scenario "A port claimed by a stopped project is skipped" port_claimed_by_stopped_project_is_skipped
 scenario "A port in use on the host is skipped" port_in_use_on_host_is_skipped
 scenario "An explicit APP_PORT is used even if taken" explicit_app_port_is_used_even_if_taken

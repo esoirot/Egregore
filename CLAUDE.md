@@ -49,6 +49,7 @@ tests/renovate && tests/new-project && tests/dev
   - `adopt` (optional, executable, idempotent): `adopt <project-dir>`, run by `new-project` (only when it copied `devcontainer.json`) and by `dev update` (when it wrote files). rails: `.ruby-version`; node: `.nvmrc`/`.node-version`; java: `.sdkmanrc` `java=`/`gradle=` plus Maven recipes; fastapi: pip recipes for requirements-only repos. Versions are edited in `devcontainer.json` with `sed`; justfile variants are filled with quoted bash `${var//pat/"$rep"}`, not sed, because they contain `&` (bash 5.2 also expands `&` in unquoted replacements). A variant only replaces the justfile the template copied (detected by its `# Team command contract` header plus a stack marker), never a repo's own.
   - `vscode-extensions`: one extension id per line, for `--ide=vscode`.
   - `test` (optional, sourced, not executable): the template's scenarios for `tests/new-project`, e.g. its `adopt` cases.
+  - `env` (optional): the template's own variables, appended by `render` to `.env.example` (after the shared ones, before `--with` service variables), so `new-project` seeds them into `.env`.
   - `env-skip` (optional): service variables `new-project` does not write for this template (rails: `DATABASE_URL`).
   - `port` (optional): one number, the app's container port (`{{PORT}}`, default 3000). `render` validates it (1-65535) before anything is created; the contract check compares it with the published port.
 - Templates:

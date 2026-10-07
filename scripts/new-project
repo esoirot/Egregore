@@ -61,6 +61,12 @@ render() {
     fi
     find "$out" -type f -exec sed -i -e "s|{{PROJECT_NAME}}|$name|g" -e "s|{{IMAGE}}|$IMAGE|g" -e "s|{{PORT}}|$port|g" {} +
 
+    # The template's own variables (templates/<name>/env), after the shared ones.
+    if [[ -f "$dir/env" && -f "$out/.env.example" ]]; then
+        printf '\n# %s template\n' "$template" >> "$out/.env.example"
+        cat "$dir/env" >> "$out/.env.example"
+    fi
+
     # The template's own services (scaffold/compose.template.yaml), then --with services.
     local includes=()
     if [[ -f "$out/compose.template.yaml" ]]; then includes+=(compose.template.yaml); fi

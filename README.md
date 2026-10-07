@@ -477,6 +477,7 @@ templates/go/
 ├── adopt                     # optional, for new-project --from and dev update
 ├── test                      # optional, scenarios for adopt (run by tests/new-project)
 ├── vscode-extensions         # for --ide=vscode
+├── env                       # optional, the template's own variables (appended to .env.example)
 ├── env-skip                  # optional
 └── port                      # optional, the app's container port (default 3000)
 ```
@@ -491,6 +492,7 @@ Start from `templates/node/` and change:
 * optional `scaffold/compose.template.yaml`: services the stack needs besides `dev` (e.g. the components of a multi-container system). `new-project` adds it to the project's `include:` (before `--with` services); placeholders work in it, and `dev update` tracks it. Keep `compose.yaml` itself shared.
 * optional `test`: given/when/then scenarios for `adopt` (and `env-skip`), sourced by `tests/new-project`; see `templates/java/test`.
 * `vscode-extensions`: one VS Code extension id per line, for `--ide=vscode`.
+* optional `env`: the template's own variables (`NAME=value` lines and comments), appended to the project's `.env.example` after the shared ones, so they reach `.env` too; `dev update` tracks them.
 * optional `env-skip`: service variables (from `services/*/env`) not to write into this template's projects (see `templates/rails/env-skip`).
 
 Pin every version, and let Renovate find each pin no built-in manager knows (feature options, versions in `install.sh` or the `justfile`) with a comment on the line just above it; the version is the first number on the next line not glued to a letter (`"python3": "3.14"` reads `3.14`; `v1.2` is not read). `tests/renovate` checks every such comment in seconds. No change to `renovate.json`:
