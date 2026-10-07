@@ -4,6 +4,8 @@ rootProject.name = "connector"
 include("controlplane", "dataplane", "identityhub", "issuerservice")
 // Code shared by runtimes (a library, not an image).
 include("superuser")
+// Gaia-X compliance client: a command-line program (just gaiax; a Kubernetes Job later).
+include("gaiax")
 
 dependencyResolutionManagement {
     repositories {

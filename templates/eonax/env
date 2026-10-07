@@ -1,0 +1,11 @@
+# The Gaia-X mock (gaiax-mock/) runs because of this profile. For the real GXDCH, remove gaiax-mock here
+# and set every GAIAX_* below (all of them: a partial set is refused), then dev down && dev up.
+COMPOSE_PROFILES=gaiax-mock
+# GAIAX_DID=did:web:example.org                       # your domain, serving /.well-known/did.json (HTTPS)
+# GAIAX_SIGNING_KEY="-----BEGIN PRIVATE KEY-----..."   # EC P-256, PEM; better from a secret store
+# GAIAX_CERT_CHAIN_URL=https://example.org/.well-known/x509CertificateChain.pem  # chain to an eIDAS/EV (or Let's Encrypt on GXDCH lab) anchor
+# GAIAX_COMPLIANCE_URL=https://compliance.lab.gaia-x.eu/v2
+# GAIAX_NOTARY_URL=https://registrationnumber.notary.lab.gaia-x.eu/v2
+# GAIAX_LEGAL_NAME=Example SAS
+# GAIAX_VAT_ID=FR00000000000
+# GAIAX_COUNTRY_CODE=FR

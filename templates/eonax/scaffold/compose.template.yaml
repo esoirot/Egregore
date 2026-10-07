@@ -16,14 +16,14 @@ x-runtime: &runtime
     vault-seed:
       condition: service_completed_successfully
   healthcheck:
-    test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/check/health"]
+    test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/check/readiness"]
     interval: 5s
     timeout: 3s
     retries: 30
     start_period: 30s
 
 x-runtime-env: &runtime-env
-  WEB_HTTP_PORT: "8080" # default API: health (/api/check/health)
+  WEB_HTTP_PORT: "8080" # default API: health probes (/api/check/readiness, /liveness, /health)
   WEB_HTTP_PATH: /api
   EDC_DATASOURCE_DEFAULT_USER: ${EDC_DB_USER:-edc}
   EDC_DATASOURCE_DEFAULT_PASSWORD: ${EDC_DB_PASSWORD:-edc}
@@ -146,6 +146,20 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/pois.geojson')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # MOCK of the Gaia-X Digital Clearing House (gaiax-mock/README.md). Starts only with the profile
+  # gaiax-mock (COMPOSE_PROFILES in .env): remove it there when you use the real GXDCH.
+  gaiax-mock:
+    build: gaiax-mock
+    profiles: ["gaiax-mock"]
+    restart: unless-stopped
+    environment:
+      MOCK_HOST: gaiax-mock:8080
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
       interval: 5s
       timeout: 3s
       retries: 10

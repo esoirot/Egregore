@@ -24,6 +24,7 @@ test *args: flow
     @echo "✓ the consumer received the provider's GTFS feed"
     dataspace/check-trust
     dataspace/check-policies
+    dataspace/check-gaiax
     dataspace/publish-pois > /dev/null
     dataspace/federated-catalog
     jq -e '[.[] | [.dataset // .["dcat:dataset"]] | flatten | map(select(. != null)) | .[]["@id"]] | (index("gtfs-demo-transit") != null and index("tourism-pois") != null)' .dataspace/federated-catalog.json > /dev/null
@@ -79,16 +80,21 @@ federated-catalog:
 # The whole flow: onboard, publish, catalog, negotiate, transfer
 flow: onboard publish catalog negotiate transfer
 
-# Every data space component reports healthy (its readiness probe)
+# Provider: get a Gaia-X compliance credential (mocked unless every GAIAX_* is set)
+gaiax:
+    dataspace/gaiax
+
+# Every data space component reports healthy (its readiness probe), and the Gaia-X mode
 health:
     #!/usr/bin/env bash
     set -euo pipefail
     failed=0
     for c in {{components}}; do
-        if curl -fsS --max-time 3 "http://$c:8080/api/check/health" > /dev/null; then
+        if curl -fsS --max-time 3 "http://$c:8080/api/check/readiness" > /dev/null; then
             echo "✓ $c"
         else
             echo "✗ $c (not ready: docker compose logs $c, from the project folder on the host)"; failed=1
         fi
     done
+    dataspace/gaiax --mode
     exit "$failed"

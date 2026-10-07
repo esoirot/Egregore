@@ -30,5 +30,9 @@ edc-did-api = { module = "org.eclipse.edc:did-api", version.ref = "edc" }
 edc-participant-context-api = { module = "org.eclipse.edc:participant-context-api", version.ref = "edc" }
 edc-participant-context-config-store-sql = { module = "org.eclipse.edc:participantcontext-config-store-sql", version.ref = "edc" }
 
+# Gaia-X compliance client (gaiax/)
+nimbus-jose-jwt = { module = "com.nimbusds:nimbus-jose-jwt", version = "10.10" }
+bouncycastle-pkix = { module = "org.bouncycastle:bcpkix-jdk18on", version = "1.86" }
+
 [plugins]
 shadow = { id = "com.gradleup.shadow", version = "9.6.1" }

@@ -44,5 +44,16 @@ eonax_project_has_the_connector_sources() {
     grep -qE '^edc = "[0-9]+\.[0-9]+\.[0-9]+"$' "$p/connector/gradle/libs.versions.toml"
 }
 
+eonax_gaiax_mock_stays_isolated() {
+    "$NEW_PROJECT" eonax eonax-mock
+    local p="$PROJECTS_DIR/eonax-mock" refs
+    # The mock lives in gaiax-mock/; only the switch points may name it.
+    refs="$(cd "$p" && grep -rl "gaiax-mock" --exclude-dir=gaiax-mock --exclude-dir=.git --exclude=template.lock . | sort | tr '\n' ' ')"
+    [[ "$refs" == "./.env ./.env.example ./README.md ./compose.template.yaml ./dataspace/check-gaiax ./dataspace/gaiax " ]] \
+        || { echo "mock referenced outside its switch points: $refs"; return 1; }
+    ! grep -rqi "mock" "$p/connector/gaiax"
+}
+
 scenario "eonax: the data space stack keeps the Kubernetes-ready rules" eonax_stack_is_kubernetes_ready
 scenario "eonax: a new project gets the connector sources" eonax_project_has_the_connector_sources
+scenario "eonax: the Gaia-X mock stays in gaiax-mock/ and its switch points" eonax_gaiax_mock_stays_isolated

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# MOCK: publishes a did.json where the mock serves it, as your web server would for a real domain.
+# Usage: publish-did <did.json> (the DID's path under http://gaiax-mock:8080, from its id)
+set -euo pipefail
+
+did="$(jq -r .id "$1")"
+path="$(sed 's|^did:web:[^:]*||; s|:|/|g' <<< "$did")"
+curl -sS --fail-with-body -X PUT -H "Content-Type: application/json" --data @"$1" "http://gaiax-mock:8080$path/did.json"
+echo "MOCK: $did published at http://gaiax-mock:8080$path/did.json"

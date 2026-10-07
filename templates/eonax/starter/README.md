@@ -21,7 +21,7 @@ Each participant runs a **control plane** (catalog, contracts, transfers, its ma
 | 3 | Identity and trust: `did:web`, Identity Hub, Issuer Service, membership credential | `just authority`, `identity`, `membership` (all: `just onboard`) | ready |
 | 4 | Usage policies (ODRL): purpose, time window | `just negotiate <asset> [purpose]`, `just transfer <asset>` | ready |
 | 5 | Federated catalogue: search every member at once; any participant publishes | `just publish-pois`, `just federated-catalog` | ready |
-| 6 | Gaia-X compliance (mocked unless configured) | `just gaiax` | planned |
+| 6 | Gaia-X compliance (mocked unless configured) | `just gaiax` | ready |
 | 7 | Consumer app, full flow test | `just dev`, `just test` | planned |
 
 ## Chapter 1: connector anatomy
@@ -39,12 +39,13 @@ Each participant runs a **control plane** (catalog, contracts, transfers, its ma
 | `vault-seed` | — | one-shot job at each `dev up`: initializes (first time) and unseals Vault, puts the encryption and transfer token keys in it |
 | `gtfs-backend` | 8000 | the provider's own system holding the timetable; not part of the data space |
 | `poi-backend` | 8000 | the consumer's own system holding its tourist points of interest (it offers them too) |
+| `gaiax-mock` | 8080 | **mock** of the Gaia-X Digital Clearing House, only with the profile `gaiax-mock` (`gaiax-mock/README.md`) |
 
 From `dev shell`:
 
 ```bash
 just health                                   # every component ready?
-curl -s http://provider-controlplane:8080/api/check/health | jq
+curl -s http://provider-controlplane:8080/api/check/readiness | jq
 ```
 
 Things to notice:
@@ -130,6 +131,22 @@ Try them:
 Who gets crawled: the members' **DIDs** (`EONAX_CATALOG_PARTICIPANTS`). Our `MemberDirectoryExtension` (`connector/controlplane/src/`) resolves each DID at every crawl and takes its `ProtocolEndpoint` from the DID document (set by `just identity`): no address is configured anywhere, and a member that joins later shows up by itself. A real data space would read the member list from a registry instead of a setting.
 
 The crawler asks each member like any consumer would, over DCP: it only sees what its credentials allow (`gtfs-partners-only` stays hidden here too).
+
+## Chapter 6: Gaia-X compliance
+
+Membership says "the authority knows you". Gaia-X compliance says more: your **legal identity** (a company, its registration number) is verified, you **accept the Gaia-X Terms and Conditions**, and a Gaia-X Digital Clearing House (GXDCH) signs that you comply. Data spaces like EONA-X build on that trust framework.
+
+`just gaiax` runs the Gaia-X Loire flow for the provider (client: `connector/gaiax/`, all credentials are VC-JWT signed with ES256):
+
+1. writes the provider's Gaia-X DID document (key, X.509 chain URL) and publishes it (on your domain; in mock mode, on the mock)
+2. asks the **notary** to sign the registration number (`gx:VatID`)
+3. signs a `gx:LegalPerson` (name, address, registration number) and a `gx:Issuer` (accepts the Terms and Conditions)
+4. presents the three to the **compliance service** (a VP-JWT); it checks them and returns a `gx:LabelCredential`
+5. stores that credential in the provider's wallet (its Identity Hub)
+
+Every step leaves its credential in `.dataspace/gaiax/` (decode one: `cut -d. -f2 .dataspace/gaiax/compliance.jwt | base64 -d 2>/dev/null | jq`).
+
+**Mock or real.** Without any `GAIAX_*` variable, the client talks to `gaiax-mock` (the `gaiax-mock` profile in `.env` starts it): offline, but what it signs is trusted by nobody (`gaiax-mock/README.md` says what it checks and what not). For the real GXDCH you need a domain serving your `did.json` over HTTPS, an X.509 certificate chain for your key, a real registration number, and every `GAIAX_*` variable listed in `.env` (a partial set is refused); remove `gaiax-mock` from `COMPOSE_PROFILES`, then `dev down && dev up`. The client code does not change. `just health` says which mode is on.
 
 ## Kubernetes-ready rules
 

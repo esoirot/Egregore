@@ -18,5 +18,10 @@ body="$(jq --arg p "$p" --arg did "$did" '
     | .serviceEndpoints[1].serviceEndpoint = "http://\($p)-controlplane:8082/protocol/2025-1"' \
     "$REQUESTS/participant-context.json")"
 create "$(identity_api "$p")" "x-api-key: $IDENTITYHUB_KEY" "$body" "identity of $p ($did)"
-curl -sS --fail-with-body "http://$p-identityhub:7083/$p/did.json" | jq -c '{id, service: [.service[].type]}'
+# The Identity Hub publishes the DID document once the participant is activated: wait for it.
+for _ in $(seq 1 30); do
+    if curl -sf "http://$p-identityhub:7083/$p/did.json" -o "$STATE/did.$p.json"; then break; fi
+    sleep 1
+done
+jq -c '{id, service: [.service[].type]}' "$STATE/did.$p.json"
 echo "Next: just membership $p"

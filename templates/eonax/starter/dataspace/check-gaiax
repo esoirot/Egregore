@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Checks the Gaia-X layer (run by just test, after onboarding):
+#   1. a partial real configuration is refused and names what is missing (never half real, half mock)
+#   2. in the mode configured (mock when no GAIAX_* is set), the provider gets a Gaia-X compliance
+#      credential (gx:LabelCredential) into its wallet; in mock mode, issued by the mock, which no
+#      real Gaia-X registry trusts
+set -euo pipefail
+source "$(dirname "$0")/lib.sh"
+
+if out="$(GAIAX_DID=did:web:example.org dataspace/gaiax 2>&1)"; then
+    echo "✗ a partial Gaia-X configuration was accepted" >&2; exit 1
+fi
+grep -q "GAIAX_SIGNING_KEY" <<< "$out" || { echo "✗ the refusal does not name the missing variables: $out" >&2; exit 1; }
+echo "✓ partial Gaia-X configuration refused, missing variables listed"
+
+dataspace/gaiax > /dev/null
+credentials="$(identity_api provider)/provider/credentials"
+label="$(curl -sS --fail-with-body -H "x-api-key: $IDENTITYHUB_KEY" "$credentials" \
+    | jq -c '[.[] | .verifiableCredential.credential | select(.type | index("gx:LabelCredential"))] | last')"
+if [[ "$label" == null ]]; then echo "✗ no Gaia-X compliance credential in the provider's wallet" >&2; exit 1; fi
+issuer="$(jq -r '.issuer.id' <<< "$label")"
+if [[ -z "${GAIAX_COMPLIANCE_URL:-}" ]]; then
+    [[ "$issuer" == did:web:gaiax-mock* ]] || { echo "✗ mock mode, but the credential comes from $issuer" >&2; exit 1; }
+    echo "✓ MOCK: compliance credential in the provider's wallet, issued by $issuer (trusted by no real Gaia-X registry)"
+else
+    echo "✓ REAL: compliance credential in the provider's wallet, issued by $issuer"
+fi
