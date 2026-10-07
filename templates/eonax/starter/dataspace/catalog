@@ -5,13 +5,18 @@
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 
-management consumer POST /v3/catalog/request "$(cat "$REQUESTS/catalog-request.json")" > "$STATE/catalog.json"
+if ! management consumer POST /v3/catalog/request "$(cat "$REQUESTS/catalog-request.json")" > "$STATE/catalog.json"; then
+    echo "Refused: $(cat "$STATE/catalog.json")" >&2
+    echo "(the provider only answers members: does the consumer hold a MembershipCredential? just membership consumer)" >&2
+    exit 1
+fi
 
 # One dataset is an object, several are an array: normalize to an array.
 jq -r '[.["dataset"] // .["dcat:dataset"]] | flatten | .[] | "dataset \(.["@id"]): \(.name // .["edc:name"] // "")"' "$STATE/catalog.json"
-offer="$(jq -r --arg a "$ASSET_ID" '[.["dataset"] // .["dcat:dataset"]] | flatten | map(select(.["@id"] == $a))[0]
-    | [.hasPolicy // .["odrl:hasPolicy"]] | flatten | .[0]["@id"] // empty' "$STATE/catalog.json")"
-if [[ -z "$offer" ]]; then echo "No offer for '$ASSET_ID': run 'just publish' first." >&2; exit 1; fi
-echo "$offer" > "$STATE/offer-id"
-echo "Offer for '$ASSET_ID': $offer"
+# Keep the whole offer (its rules included): negotiate sends it back as is.
+jq --arg a "$ASSET_ID" '[.["dataset"] // .["dcat:dataset"]] | flatten | map(select(.["@id"] == $a))[0]
+    | [.hasPolicy // .["odrl:hasPolicy"]] | flatten | .[0] // empty' "$STATE/catalog.json" > "$STATE/offer.json"
+if [[ ! -s "$STATE/offer.json" ]]; then echo "No offer for '$ASSET_ID': run 'just publish' first." >&2; exit 1; fi
+echo "Offer for '$ASSET_ID': $(jq -r '.["@id"]' "$STATE/offer.json")"
+echo "  rules: $(jq -c '.permission // .["odrl:permission"]' "$STATE/offer.json")"
 echo "Full answer: $STATE/catalog.json. Next: just negotiate"

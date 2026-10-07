@@ -1,7 +1,7 @@
 {
   "@context": { "@vocab": "https://w3id.org/edc/v0.0.1/ns/" },
   "@type": "CatalogRequest",
-  "counterPartyId": "provider",
+  "counterPartyId": "did:web:provider-identityhub%3A7083:provider",
   "counterPartyAddress": "http://provider-controlplane:8082/protocol/2025-1",
   "protocol": "dataspace-protocol-http:2025-1"
 }

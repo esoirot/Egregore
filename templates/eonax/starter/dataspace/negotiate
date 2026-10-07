@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
-# Consumer: ask for a contract on the offer. Both connectors run the negotiation state machine
-# (REQUESTED, AGREED, VERIFIED, FINALIZED); FINALIZED gives a contract agreement id.
+# Consumer: ask for a contract on the offer. It sends the offer back exactly as offered (its rules
+# included): the provider's agreement must match it, or the consumer rejects it. Both connectors run
+# the negotiation state machine (REQUESTED, AGREED, VERIFIED, FINALIZED); FINALIZED gives a contract
+# agreement id. The provider checks its contract policy against the consumer's credentials (DCP).
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
-need offer-id catalog
+need offer.json catalog
 
-body="$(jq --arg id "$(cat "$STATE/offer-id")" '.policy["@id"] = $id' "$REQUESTS/contract-request.json")"
-negotiation="$(management consumer POST /v3/contractnegotiations "$body" | jq -r '.["@id"]')"
+# The offer's terms are ODRL; its rules name EDC terms as edc:<name> (e.g. edc:MembershipCredential).
+body="$(jq --slurpfile offer "$STATE/offer.json" '.policy = ($offer[0] + {
+        "@context": ["http://www.w3.org/ns/odrl.jsonld", {"edc": "https://w3id.org/edc/v0.0.1/ns/"}],
+        assigner: .policy.assigner, target: .policy.target})' "$REQUESTS/contract-request.json")"
+response="$(management consumer POST /v3/contractnegotiations "$body")" || { echo "Refused: $response" >&2; exit 1; }
+negotiation="$(jq -r '.["@id"]' <<< "$response")"
 echo "Negotiation $negotiation started"
 wait_for_state consumer "/v3/contractnegotiations/$negotiation" FINALIZED
 agreement="$(management consumer GET "/v3/contractnegotiations/$negotiation" | jq -r '.contractAgreementId')"

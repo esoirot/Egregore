@@ -1,0 +1,14 @@
+{
+  "@context": { "@vocab": "https://w3id.org/edc/v0.0.1/ns/" },
+  "@id": "gtfs-partners-only",
+  "properties": {
+    "name": "Demo Transit timetable, partners only (GTFS)",
+    "description": "Public transport timetable of a synthetic bus line, Opera - Nation",
+    "contenttype": "application/zip"
+  },
+  "dataAddress": {
+    "@type": "DataAddress",
+    "type": "HttpData",
+    "baseUrl": "http://gtfs-backend:8000/gtfs.zip"
+  }
+}

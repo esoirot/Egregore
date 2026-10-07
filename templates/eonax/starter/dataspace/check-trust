@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Checks the trust rules (run by just test, after the flow):
+#   1. an offer whose access policy needs a credential the consumer lacks (PartnerCredential) never
+#      shows in its catalog
+#   2. a consumer without a MembershipCredential is refused: the provider rejects its requests (401)
+#      before any policy runs. Then the consumer asks for one again (just membership consumer).
+set -euo pipefail
+source "$(dirname "$0")/lib.sh"
+
+dataspace/catalog > /dev/null
+if jq -e '[.["dataset"] // .["dcat:dataset"]] | flatten | any(.["@id"] == "gtfs-partners-only")' "$STATE/catalog.json" > /dev/null; then
+    echo "✗ the consumer sees the partners-only offer" >&2; exit 1
+fi
+echo "✓ partners-only offer hidden from a consumer without a PartnerCredential"
+
+credentials="$(identity_api consumer)/consumer/credentials"
+key="x-api-key: $IDENTITYHUB_KEY"
+for id in $(curl -sS --fail-with-body -H "$key" "$credentials?type=MembershipCredential" | jq -r '.[].id'); do
+    curl -sS --fail-with-body -o /dev/null -X DELETE -H "$key" "$credentials/$id"
+done
+if dataspace/catalog > /dev/null 2>&1; then
+    echo "✗ a consumer without a MembershipCredential got the catalog" >&2; exit 1
+fi
+echo "✓ consumer without a MembershipCredential refused"
+dataspace/membership consumer > /dev/null
+dataspace/catalog > /dev/null
+echo "✓ consumer member again: catalog available"

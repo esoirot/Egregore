@@ -1,0 +1,9 @@
+{
+  "@context": ["https://w3id.org/edc/connector/management/v2"],
+  "@type": "CelExpression",
+  "@id": "membership-cel",
+  "leftOperand": "https://w3id.org/edc/v0.0.1/ns/MembershipCredential",
+  "description": "True when the other side presents a MembershipCredential, already started",
+  "scopes": ["catalog", "contract.negotiation", "transfer.process"],
+  "expression": "ctx.agent.claims.vc.filter(c, c.type.exists(t, t.contains('MembershipCredential'))).exists(c, c.credentialSubject.exists(cs, timestamp(cs.membershipStartDate) < now))"
+}

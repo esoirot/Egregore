@@ -6,19 +6,19 @@ A mini data space shaped like EONA-X (the European mobility, transport and touri
 
 | Participant | Role |
 | --- | --- |
-| `provider` | e.g. a transport operator, publishes a public transport timetable (GTFS) |
-| `consumer` | e.g. a travel app, wants to use that timetable |
-| authority | runs the data space: issues membership credentials (trust chapter) |
+| `provider` (`did:web:provider-identityhub%3A7083:provider`) | e.g. a transport operator, publishes a public transport timetable (GTFS) |
+| `consumer` (`did:web:consumer-identityhub%3A7083:consumer`) | e.g. a travel app, wants to use that timetable |
+| authority (`did:web:issuerservice%3A10016:issuer`) | runs the data space: registers members, issues their MembershipCredential |
 
-Each participant runs a **control plane** (catalog, contracts, transfers, its management API) and a **data plane** (moves the data). State lives in Postgres, one database per runtime.
+Each participant runs a **control plane** (catalog, contracts, transfers, its management API), a **data plane** (moves the data) and an **Identity Hub** (its DID, keys and credentials). The authority runs an **Issuer Service**. State lives in Postgres (one database per runtime), keys and secrets in Vault.
 
 ## Training path
 
 | Chapter | Layer | Command | Status |
 | --- | --- | --- | --- |
 | 1 | Connector anatomy: control plane, data plane, health | `just health` | ready |
-| 2 | Publish, catalog, negotiate, transfer (Dataspace Protocol) | `just publish`, `catalog`, `negotiate`, `transfer` (all: `just flow`) | ready |
-| 3 | Identity and trust: `did:web`, Identity Hub, Issuer Service, membership credential | `just onboard` | planned |
+| 2 | Publish, catalog, negotiate, transfer (Dataspace Protocol) | `just publish`, `catalog`, `negotiate`, `transfer` | ready |
+| 3 | Identity and trust: `did:web`, Identity Hub, Issuer Service, membership credential | `just authority`, `identity`, `membership` (all: `just onboard`) | ready |
 | 4 | Usage policies (ODRL): purpose, time window | `just negotiate` | planned |
 | 5 | Federated catalogue | `just catalog` | planned |
 | 6 | Gaia-X compliance (mocked unless configured) | `just gaiax` | planned |
@@ -33,8 +33,10 @@ Each participant runs a **control plane** (catalog, contracts, transfers, its ma
 | `provider-controlplane`, `consumer-controlplane` | 8080 `/api` (health), 8081 `/management` (your requests), 8082 `/protocol` (Dataspace Protocol, connector to connector), 8083 `/control` (to its data plane) | decides: what is offered, to whom, under which contract |
 | `provider-dataplane`, `consumer-dataplane` | 8080 `/api` (health), 8083 `/control`, 8085 `/public` (data pulls) | moves the data once a contract allows it |
 | `edc-postgres` | 5432 | state of every runtime |
-| `vault` | 8200 | secrets: each participant's keys, in its own folder (dev mode: in memory) |
-| `vault-seed` | — | one-shot job at each `dev up`: puts the transfer token keys into Vault |
+| `provider-identityhub`, `consumer-identityhub` | 8080 `/api` (health), 7081 `/api/identity` (Identity API), 7082 `/api/credentials` (DCP: presents credentials), 7083 `/` (DID documents), 7084 `/api/sts` (tokens for its connector) | a participant's identity and wallet |
+| `issuerservice` | 8080 `/api` (health), 10012 `/api/issuance` (DCP issuance), 10013 `/api/admin` (members, credential definitions), 10015 `/api/identity`, 10016 `/` (DID document), 9999 `/statuslist` | the authority |
+| `vault` | 8200 | secrets: keys and tokens, one folder per participant; data in a named volume |
+| `vault-seed` | — | one-shot job at each `dev up`: initializes (first time) and unseals Vault, puts the encryption and transfer token keys in it |
 | `gtfs-backend` | 8000 | the provider's own system holding the timetable; not part of the data space |
 
 From `dev shell`:
@@ -50,17 +52,19 @@ Things to notice:
 * The connector code is only a list of EDC modules (`connector/controlplane/build.gradle.kts`, `connector/dataplane/build.gradle.kts`): EDC loads every extension it finds on the classpath. The control plane uses `iam-mock` for now: every participant is trusted until the trust chapter replaces it with credentials.
 * All configuration is environment variables in `compose.template.yaml`: `EDC_PARTICIPANT_ID` is the setting `edc.participant.id`, and so on.
 
-After changing connector code, rebuild the images from the project folder on the host: `docker compose build && dev down && dev up`.
+After changing connector code, rebuild the images from the project folder on the host: `docker compose build && dev down && dev up` (not `docker compose up`: it recreates `dev` without what `dev exec` needs).
+
+Vault keeps its unseal key in the `vault-init` volume, next to its data: fine to learn, never in production (use auto-unseal). To start the data space over from nothing (identities, credentials, offers): `dev down`, then `docker volume rm <project>_vault-data <project>_vault-init <project>_edc-postgres-data`, then `dev up` and `just onboard`. Always the three together: Postgres records without their Vault keys (or the reverse) leave broken identities.
 
 ## Chapter 2: publish, catalog, negotiate, transfer
 
-The heart of a data space: a provider offers data under a contract, a consumer finds it, agrees to the contract, and gets the data, without ever learning where the provider keeps it. Run the steps one by one (each prints what happened), or all of them with `just flow`.
+The heart of a data space: a provider offers data under a contract, a consumer finds it, agrees to the contract, and gets the data, without ever learning where the provider keeps it. Since chapter 3 every request needs a membership: run `just onboard` first (once), then the steps one by one (each prints what happened), or everything with `just flow`.
 
 | Step | Who | What happens | Read |
 | --- | --- | --- | --- |
-| `just publish` | provider | creates an **asset** (the GTFS feed and its real location, `dataAddress`), a **policy** (here: no rules) and a **contract definition** (this asset, under this policy) in its control plane | `dataspace/publish`, `dataspace/requests/asset.json`, `policy.json`, `contract-definition.json` |
+| `just publish` | provider | creates an **asset** (the GTFS feed and its real location, `dataAddress`), a **policy** (`members-only`, see chapter 3) and a **contract definition** (this asset, under this policy) in its control plane | `dataspace/publish`, `dataspace/requests/asset.json`, `policy.json`, `contract-definition.json` |
 | `just catalog` | consumer | asks the provider's connector for its **catalog** (Dataspace Protocol); each dataset carries **offers** (`odrl:hasPolicy`) | `dataspace/catalog`, `.dataspace/catalog.json` |
-| `just negotiate` | consumer | requests a contract on the offer; both connectors run the negotiation until **FINALIZED**, giving a **contract agreement** | `dataspace/negotiate`, `requests/contract-request.json` |
+| `just negotiate` | consumer | sends the offer back **exactly as offered** (rules included) as a contract request; both connectors run the negotiation until **FINALIZED**, giving a **contract agreement** | `dataspace/negotiate`, `requests/contract-request.json`, `.dataspace/offer.json` |
 | `just transfer` | consumer | starts a **transfer process** (HTTP pull) under the agreement; the provider's data plane hands out an **EDR** (endpoint + short-lived token); the consumer pulls `downloads/gtfs.zip` with it | `dataspace/transfer`, `.dataspace/edr.json` |
 
 Things to notice:
@@ -68,9 +72,32 @@ Things to notice:
 * You always talk to **your own** connector (its management API, with your `X-Api-Key`); connectors talk to each other over the Dataspace Protocol (`/protocol`).
 * The consumer never sees `http://gtfs-backend:8000`: the EDR points at the provider's data plane, which fetches from the backend.
 * The EDR token is signed with keys from Vault (`vault-seed` put them there); try the same `curl` later and it expires.
-* Identity is still mocked: the provider trusts anyone. Chapter 3 replaces that with credentials.
+`just test` runs the whole flow, checks the consumer received a GTFS feed, then checks the trust rules (chapter 3). Management API keys default to `provider-api-key` and `consumer-api-key`; set `PROVIDER_API_KEY` and `CONSUMER_API_KEY` in `.env` to change them (then `dev down && dev up`).
 
-`just test` runs the whole flow and checks the consumer received a GTFS feed. Management API keys default to `provider-api-key` and `consumer-api-key`; set `PROVIDER_API_KEY` and `CONSUMER_API_KEY` in `.env` to change them (then `dev down && dev up`).
+## Chapter 3: identity and trust
+
+Until now anyone could talk to the provider. A real data space only lets its **members** in, and nobody takes anybody's word for it: the authority **issues** a signed credential, each participant keeps it in its own **wallet** and **presents** it, and the other side **verifies** the signature against the authority's public key. No central server is asked at request time. This is the Decentralized Claims Protocol (DCP), on W3C DIDs and Verifiable Credentials.
+
+| Step | Who | What happens | Read |
+| --- | --- | --- | --- |
+| `just authority` | authority | its identity (`did:web:issuerservice%3A10016:issuer`, signing key, issuance endpoint), how it checks a member (the `membership` **attestation**, our Java code in `connector/issuerservice/`), what it issues (the **MembershipCredential definition**), who the members are (provider and consumer, registered as **holders**) | `dataspace/authority`, `requests/authority.json`, `membership-*.json`, `holder.json` |
+| `just identity provider` (and `consumer`) | participant | its Identity Hub creates its **DID document** (`curl http://provider-identityhub:7083/provider/did.json`), its key pair (private key in its Vault folder), and an STS client for its connector | `dataspace/identity`, `requests/participant-context.json` |
+| `just membership provider` (and `consumer`) | participant | its Identity Hub asks the authority for a MembershipCredential (DCP issuance); the authority checks the request comes from a registered holder, signs, and delivers it to the wallet | `dataspace/membership`, `requests/credential-request.json` |
+
+How a request is trusted now (`just catalog`, `negotiate`, `transfer`):
+
+1. The consumer's control plane gets a token from its own Identity Hub (STS), allowed to read its MembershipCredential (the `membership` scope, `EDC_IAM_DCP_SCOPES_MEMBERSHIP_*`).
+2. The provider resolves the consumer's DID, verifies the token, and asks the consumer's Identity Hub for a presentation of that credential.
+3. It checks the credential is signed by a **trusted issuer** (`EDC_IAM_TRUSTED-ISSUER_AUTHORITY_ID`): no valid membership, no answer (HTTP 401).
+4. Then policies run on the credentials' claims: `members-only` holds when the **CEL expression** `membership-cel` is true (`requests/cel-membership.json`: a MembershipCredential that has started). CEL expressions are data the provider publishes, not code.
+
+Things to try:
+
+* `curl -s http://issuerservice:10016/issuer/did.json | jq` and the participants' DID documents: keys and service endpoints, all public.
+* The partners-only offer (`requests/policy-partners.json`) needs a PartnerCredential nobody holds: it never shows in the consumer's catalog.
+* Remove the consumer's credential (what `dataspace/check-trust` does), and every request is refused; `just membership consumer` brings it back.
+
+The authority's attestation accepts every registered holder: registering a holder is the membership decision. A real authority would check its own registry there.
 
 ## Kubernetes-ready rules
 
@@ -82,6 +109,6 @@ The stack runs on Docker Compose but must move to Kubernetes without redesign. E
 4. ✓ Components find each other by service name; no `network_mode`, no host paths outside the project.
 5. ✓ Every component has a health endpoint and healthcheck (later: readiness and liveness probes); one-shot jobs (label `eonax.role: job`, like `vault-seed`) run once instead (later: Kubernetes Jobs).
 6. Startup survives any start order (`restart: unless-stopped`; `depends_on` is only a convenience).
-7. State only in Postgres or named volumes (later: persistent volume claims).
+7. State only in Postgres or named volumes (later: persistent volume claims). Postgres keeps the identities' records and Vault their private keys: both persist, or identities break after a restart.
 
 Images run as a non-root numeric user (10001), as Kubernetes `runAsNonRoot` expects.

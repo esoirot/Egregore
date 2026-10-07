@@ -1,14 +1,14 @@
 {
-  "@context": { "@vocab": "https://w3id.org/edc/v0.0.1/ns/" },
+  "@context": {
+    "@vocab": "https://w3id.org/edc/v0.0.1/ns/"
+  },
   "@type": "ContractRequest",
-  "counterPartyId": "provider",
+  "counterPartyId": "did:web:provider-identityhub%3A7083:provider",
   "counterPartyAddress": "http://provider-controlplane:8082/protocol/2025-1",
   "protocol": "dataspace-protocol-http:2025-1",
   "policy": {
-    "@context": "http://www.w3.org/ns/odrl.jsonld",
-    "@id": "set by dataspace/negotiate: the offer id from the catalog",
-    "@type": "Offer",
-    "assigner": "provider",
+    "@id": "set by dataspace/negotiate: the whole offer from the catalog (.dataspace/offer.json)",
+    "assigner": "did:web:provider-identityhub%3A7083:provider",
     "target": "gtfs-demo-transit"
   }
 }

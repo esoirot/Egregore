@@ -1,15 +1,20 @@
-// Shared by every runtime: Java 21, and one runnable jar (build/libs/runtime.jar) per runtime.
+// Shared settings: Java 21 everywhere, and one runnable jar (build/libs/runtime.jar) per runtime.
 plugins {
     alias(libs.plugins.shadow) apply false
 }
 
-subprojects {
-    apply(plugin = "application")
-    apply(plugin = "com.gradleup.shadow")
+val runtimes = setOf("controlplane", "dataplane", "identityhub", "issuerservice")
 
+subprojects {
+    apply(plugin = "java")
     extensions.configure<JavaPluginExtension> {
         toolchain.languageVersion = JavaLanguageVersion.of(21)
     }
+}
+
+configure(subprojects.filter { it.name in runtimes }) {
+    apply(plugin = "application")
+    apply(plugin = "com.gradleup.shadow")
 
     extensions.configure<JavaApplication> {
         // EDC's runtime: loads every extension found on the classpath.

@@ -4,7 +4,7 @@
 
 set dotenv-load
 
-components := "provider-controlplane provider-dataplane consumer-controlplane consumer-dataplane"
+components := "issuerservice provider-identityhub provider-controlplane provider-dataplane consumer-identityhub consumer-controlplane consumer-dataplane"
 
 # List recipes
 default:
@@ -17,11 +17,12 @@ install:
 # Show the data space health (the consumer app comes in a later chapter)
 dev: health
 
-# Run the connector code's tests, then the data space flow end to end
+# Run the connector code's tests, then the data space end to end: the flow, then the trust rules
 test *args: flow
     cd connector && gradle --quiet test {{args}}
     jar tf downloads/gtfs.zip | grep -qx stops.txt
     @echo "✓ the consumer received the provider's GTFS feed"
+    dataspace/check-trust
 
 # Compile and run the checks, without tests
 lint:
@@ -30,6 +31,21 @@ lint:
 # Build the runtime jars (the stack images build them on their own, see connector/Dockerfile)
 build:
     cd connector && gradle --quiet shadowJar
+
+# Authority: identity, membership attestation and credential definition, members (holders)
+authority:
+    dataspace/authority
+
+# A participant's identity in its Identity Hub: DID document, keys, STS client
+identity participant:
+    dataspace/identity {{participant}}
+
+# A participant asks the authority for its MembershipCredential
+membership participant:
+    dataspace/membership {{participant}}
+
+# The whole chapter-3 onboarding: authority, then each participant's identity and membership
+onboard: authority (identity "provider") (identity "consumer") (membership "provider") (membership "consumer")
 
 # Provider: publish the GTFS timetable (asset, policy, contract definition)
 publish:
@@ -47,8 +63,8 @@ negotiate:
 transfer:
     dataspace/transfer
 
-# The whole chapter-2 flow: publish, catalog, negotiate, transfer
-flow: publish catalog negotiate transfer
+# The whole flow: onboard, publish, catalog, negotiate, transfer
+flow: onboard publish catalog negotiate transfer
 
 # Every data space component reports healthy (its readiness probe)
 health:

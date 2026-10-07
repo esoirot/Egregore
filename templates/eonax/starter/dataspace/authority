@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# The data space authority sets itself up in its Issuer Service:
+#   1. its own identity: participant context "issuer", did:web:issuerservice%3A10016:issuer, signing key
+#   2. how it checks a member: the "membership" attestation (our Java code, issuerservice/)
+#   3. what it issues: the MembershipCredential definition (claims, format, 7 days validity)
+#   4. who is a member: provider and consumer, registered as holders. Only holders may ask for credentials.
+set -euo pipefail
+source "$(dirname "$0")/lib.sh"
+
+key="x-api-key: $ISSUER_KEY"
+create "$ISSUER_IDENTITY" "$key" "$(cat "$REQUESTS/authority.json")" "authority identity ($AUTHORITY_DID)"
+create "$ISSUER_ADMIN/attestations" "$key" "$(cat "$REQUESTS/membership-attestation.json")" "membership attestation"
+create "$ISSUER_ADMIN/credentialdefinitions" "$key" "$(cat "$REQUESTS/membership-credential-definition.json")" "MembershipCredential definition"
+for p in provider consumer; do
+    body="$(jq --arg did "$(did_of "$p")" --arg name "$p" '.did = $did | .holderId = $did | .name = $name' "$REQUESTS/holder.json")"
+    create "$ISSUER_ADMIN/holders" "$key" "$body" "member $p ($(did_of "$p"))"
+done
+echo "The authority issues MembershipCredentials to its members. Next: just identity provider (and consumer)"

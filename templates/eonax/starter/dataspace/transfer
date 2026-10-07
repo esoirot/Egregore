@@ -9,7 +9,8 @@ source "$(dirname "$0")/lib.sh"
 need agreement-id negotiate
 
 body="$(jq --arg id "$(cat "$STATE/agreement-id")" '.contractId = $id' "$REQUESTS/transfer-request.json")"
-transfer="$(management consumer POST /v3/transferprocesses "$body" | jq -r '.["@id"]')"
+response="$(management consumer POST /v3/transferprocesses "$body")" || { echo "Refused: $response" >&2; exit 1; }
+transfer="$(jq -r '.["@id"]' <<< "$response")"
 echo "Transfer process $transfer started"
 wait_for_state consumer "/v3/transferprocesses/$transfer" STARTED
 

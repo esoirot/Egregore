@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# A participant asks the authority for its MembershipCredential (just membership provider|consumer).
+# Its Identity Hub sends a DCP credential request to the authority's Issuer Service (found through the
+# authority's DID document); the issuer checks it is a registered member (attestation), signs the
+# credential and delivers it to the participant's Identity Hub, which stores it in the wallet.
+set -euo pipefail
+source "$(dirname "$0")/lib.sh"
+
+p="${1:?Usage: membership provider|consumer}"
+credentials="$(identity_api "$p")/$p/credentials"
+key="x-api-key: $IDENTITYHUB_KEY"
+held="$(curl -sS --fail-with-body -H "$key" "$credentials?type=MembershipCredential" | jq length)"
+if [[ "$held" -gt 0 ]]; then
+    echo "✓ $p already holds a MembershipCredential"
+    exit 0
+fi
+
+# A new request each time: a failed one stays failed.
+request="membership-$p-$(date +%s)"
+body="$(jq --arg r "$request" '.holderPid = $r' "$REQUESTS/credential-request.json")"
+create "$credentials/request" "$key" "$body" "credential request $request"
+api="$credentials/request"
+
+status=""
+for _ in $(seq 1 30); do
+    status="$(curl -sS --fail-with-body -H "$key" "$api/$request" | jq -r '.status')"
+    if [[ "$status" == ISSUED ]]; then break; fi
+    sleep 1
+done
+if [[ "$status" != ISSUED ]]; then
+    echo "Credential request $request is $status after 30 s: docker compose logs issuerservice $p-identityhub" >&2
+    exit 1
+fi
+echo "✓ ISSUED: $p holds a MembershipCredential from $AUTHORITY_DID"
