@@ -11,6 +11,6 @@ services:
     volumes:
       - .:/workspace
     ports:
-      - "127.0.0.1:${APP_PORT:-3000}:3000"
+      - "127.0.0.1:${APP_PORT:-3000}:{{PORT}}"
     command: sleep infinity
     init: true

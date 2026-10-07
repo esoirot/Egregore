@@ -44,6 +44,11 @@ BASE_IMAGE="$IMAGE"
 source "$SANDBOX/images/devcontainer-cli/image.env"
 CLI_IMAGE="$IMAGE"
 
+# template_port <dir>: the app's container port for a template directory (its port file, else 3000).
+template_port() {
+    if [[ -f "$1/port" ]]; then cat "$1/port"; else echo 3000; fi
+}
+
 # template_names: every template of the sandbox (a directory with a scaffold/).
 template_names() {
     local d
@@ -317,8 +322,9 @@ if sys.argv[1]:
     done
     docker compose -f "$p/compose.yaml" config --format json | python3 -c 'import json, sys
 dev = json.load(sys.stdin)["services"]["dev"]
-assert dev["image"] == sys.argv[1] and "APP_PORT" in dev.get("environment", {})' "$BASE_IMAGE" \
-        || { echo "$t: compose service dev must use the base image and load .env (env_file)"; return 1; }
+assert dev["image"] == sys.argv[1] and "APP_PORT" in dev.get("environment", {})
+assert [p["target"] for p in dev["ports"]] == [int(sys.argv[2])]' "$BASE_IMAGE" "$(template_port "$dir")" \
+        || { echo "$t: compose service dev must use the base image, load .env (env_file) and publish port $(template_port "$dir")"; return 1; }
     head -1 "$p/justfile" | grep -q '^# Team command contract' \
         || { echo "$t: justfile lacks the '# Team command contract' header (adopt variants rely on it)"; return 1; }
     recipes=" $(docker run --rm -v "$p:/workspace" "$BASE_IMAGE" just --summary) "
@@ -349,7 +355,8 @@ shared_files_reach_every_template() {
         "$NEW_PROJECT" "$t" "shared-$t"
         for f in compose.yaml .env.example; do
             [[ "$(cat "$PROJECTS_DIR/shared-$t/$f")" == \
-               "$(sed -e "s|{{PROJECT_NAME}}|shared-$t|g" -e "s|{{IMAGE}}|$BASE_IMAGE|g" "$SANDBOX/templates/_shared/$f")" ]] \
+               "$(sed -e "s|{{PROJECT_NAME}}|shared-$t|g" -e "s|{{IMAGE}}|$BASE_IMAGE|g" \
+                      -e "s|{{PORT}}|$(template_port "$SANDBOX/templates/$t")|g" "$SANDBOX/templates/_shared/$f")" ]] \
                 || { echo "$t: $f differs from templates/_shared/$f"; return 1; }
         done
     done
@@ -382,6 +389,39 @@ update_brings_shared_fix_to_every_template() {
         (cd "$PROJECTS_DIR/$p" && "$sb/scripts/dev.real" update) > /dev/null
         grep -qx "# shared fix" "$PROJECTS_DIR/$p/compose.yaml"
     done
+}
+
+# --- app port (templates/<name>/port) ---------------------------------------
+
+port_file_sets_container_port() {
+    local sb="$WORK/sb-port"; make_sandbox "$sb"
+    echo 8000 > "$sb/templates/node/port"
+    printf '\n# app port {{PORT}}\n' >> "$sb/templates/node/scaffold/justfile"
+    "$sb/scripts/new-project" node p8000
+    local p="$PROJECTS_DIR/p8000"
+    grep -qF '"127.0.0.1:${APP_PORT:-3000}:8000"' "$p/compose.yaml"
+    grep -q "port 8000 in the container" "$p/.env.example"
+    grep -qx "# app port 8000" "$p/justfile"
+    check_contract "$sb" node
+}
+
+invalid_port_fails_and_creates_nothing() {
+    local sb="$WORK/sb-badport"; make_sandbox "$sb"
+    local bad
+    for bad in abc 0 70000 "80 81"; do
+        echo "$bad" > "$sb/templates/node/port"
+        fails "$sb/scripts/new-project" node badport > "$WORK/badport.out" 2>&1
+        grep -q "templates/node/port" "$WORK/badport.out" || { echo "no file named for: $bad"; return 1; }
+        [[ ! -e "$PROJECTS_DIR/badport" ]] || { echo "project created for: $bad"; return 1; }
+    done
+}
+
+update_brings_port_change() {
+    local sb="$WORK/sb-portupd"; make_sandbox "$sb"
+    "$sb/scripts/new-project" node portupd
+    echo 8000 > "$sb/templates/node/port"
+    (cd "$PROJECTS_DIR/portupd" && "$sb/scripts/dev.real" update) > /dev/null
+    grep -qF '"127.0.0.1:${APP_PORT:-3000}:8000"' "$PROJECTS_DIR/portupd/compose.yaml"
 }
 
 # --- dev update -------------------------------------------------------------
@@ -508,6 +548,9 @@ scenario "Shared scaffold files reach every template" shared_files_reach_every_t
 scenario "A template's own file wins over the shared one" template_file_wins_over_shared
 scenario "_shared is not a template" shared_is_not_a_template
 scenario "dev update brings a shared fix to every template" update_brings_shared_fix_to_every_template
+scenario "A port file sets the app's container port" port_file_sets_container_port
+scenario "An invalid port file fails without creating anything" invalid_port_fails_and_creates_nothing
+scenario "dev update brings a template port change" update_brings_port_change
 scenario "dev update replaces untouched files" update_replaces_untouched_files
 scenario "dev update never overwrites edits" update_never_overwrites_edits
 scenario "dev update skips edited file when template unchanged" update_skips_edited_file_when_template_unchanged

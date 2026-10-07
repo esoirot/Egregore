@@ -32,11 +32,26 @@ names() {
     done
 }
 
+# app_port <template>: the port the template's app listens on in the container
+# (templates/<name>/port, else 3000).
+app_port() {
+    local file="$TEMPLATES_DIR/$1/port" port=3000
+    if [[ -f "$file" ]]; then
+        port="$(cat "$file")"
+        if [[ ! "$port" =~ ^[1-9][0-9]{0,4}$ ]] || (( port > 65535 )); then
+            echo "Error: templates/$1/port must hold one port number (1-65535), not: $port" >&2
+            exit 1
+        fi
+    fi
+    echo "$port"
+}
+
 # render <template> <name> <services> <ide> <with-starter> <out>: write the template's
 # files into out, fully rendered (placeholders, services, IDE settings).
 render() {
-    local template="$1" name="$2" services="$3" ide="$4" starter="$5" out="$6" svc json exts
+    local template="$1" name="$2" services="$3" ide="$4" starter="$5" out="$6" svc json exts port
     local dir="$TEMPLATES_DIR/$template"
+    port="$(app_port "$template")"
 
     # Files every template shares; the template's own files win.
     cp -R "$TEMPLATES_DIR/_shared/." "$out/"
@@ -44,7 +59,7 @@ render() {
     if [[ "$starter" == yes && -d "$dir/starter" ]]; then
         cp -R "$dir/starter/." "$out/"
     fi
-    find "$out" -type f -exec sed -i -e "s|{{PROJECT_NAME}}|$name|g" -e "s|{{IMAGE}}|$IMAGE|g" {} +
+    find "$out" -type f -exec sed -i -e "s|{{PROJECT_NAME}}|$name|g" -e "s|{{IMAGE}}|$IMAGE|g" -e "s|{{PORT}}|$port|g" {} +
 
     if [[ -n "$services" ]]; then
         {
