@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# The federated catalog: the consumer's control plane crawls every member's catalog into its own
+# cache (every 15 s here), so it can search the whole data space without asking each one.
+# Who is crawled: the members' DIDs (EONAX_CATALOG_PARTICIPANTS); each DID document says where its
+# connector speaks the Dataspace Protocol (connector/controlplane/.../MemberDirectoryExtension.java).
+# Each member answers like any catalog request: only the offers the crawler may see (members-only).
+set -euo pipefail
+source "$(dirname "$0")/lib.sh"
+
+members="$(tr ',' '\n' <<< "${EONAX_CATALOG_PARTICIPANTS:-$(did_of provider),$(did_of consumer)}" | grep -c .)"
+for _ in $(seq 1 150); do
+    management consumer POST /v3/catalogs/request "$(cat "$REQUESTS/catalogs-query.json")" > "$STATE/federated-catalog.json"
+    if [[ "$(jq '[.[] | select(([.dataset // .["dcat:dataset"]] | flatten | map(select(. != null)) | length) > 0)] | length' \
+        "$STATE/federated-catalog.json")" -ge "$members" ]]; then
+        break
+    fi
+    sleep 2
+done
+jq -r '.[] | "\(.participantId // .["dspace:participantId"] // "?"):",
+    ([.dataset // .["dcat:dataset"]] | flatten | map(select(. != null)) | .[] | "  \(.["@id"]): \(.name // .["edc:name"] // "")")' \
+    "$STATE/federated-catalog.json"
+echo "Full answer: $STATE/federated-catalog.json"

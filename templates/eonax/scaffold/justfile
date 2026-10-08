@@ -1,0 +1,115 @@
+# Team command contract: every project exposes install, dev, test, lint, build.
+# Run inside the container (dev shell). The data space runs next to it (compose.template.yaml);
+# reach its services by name, e.g. http://provider-controlplane:8081/management.
+
+set dotenv-load
+
+components := "issuerservice provider-identityhub provider-controlplane provider-dataplane consumer-identityhub consumer-controlplane consumer-dataplane"
+
+# List recipes
+default:
+    @just --list
+
+# Compile the connector runtimes (run by dev up)
+install:
+    cd connector && gradle --quiet classes
+
+# The consumer's trip planner on port 3000 (host: APP_PORT): data space data next to its own
+dev:
+    dataspace/consumer-app
+
+# Run the connector code's tests, then the data space end to end: the flow, the trust rules, the usage policies
+test *args: wait flow
+    cd connector && gradle --quiet test {{args}}
+    jar tf downloads/gtfs-demo-transit.zip | grep -qx stops.txt
+    @echo "✓ the consumer received the provider's GTFS feed"
+    dataspace/check-trust
+    dataspace/check-policies
+    dataspace/check-gaiax
+    dataspace/publish-pois > /dev/null
+    dataspace/federated-catalog
+    jq -e '[.[] | [.dataset // .["dcat:dataset"]] | flatten | map(select(. != null)) | .[]["@id"]] | (index("gtfs-demo-transit") != null and index("tourism-pois") != null)' .dataspace/federated-catalog.json > /dev/null
+    @echo "✓ the federated catalog lists both members' offers"
+    dataspace/consumer-app --check
+
+# Compile and run the checks, without tests
+lint:
+    cd connector && gradle --quiet check -x test
+
+# Build the runtime jars (the stack images build them on their own, see connector/Dockerfile)
+build:
+    cd connector && gradle --quiet shadowJar
+
+# Authority: identity, membership attestation and credential definition, members (holders)
+authority:
+    dataspace/authority
+
+# A participant's identity in its Identity Hub: DID document, keys, STS client
+identity participant:
+    dataspace/identity {{participant}}
+
+# A participant asks the authority for its MembershipCredential
+membership participant:
+    dataspace/membership {{participant}}
+
+# The whole chapter-3 onboarding: authority, then each participant's identity and membership
+onboard: authority (identity "provider") (identity "consumer") (membership "provider") (membership "consumer")
+
+# Provider: publish the GTFS timetable (asset, policy, contract definition)
+publish:
+    dataspace/publish
+
+# Consumer: read the provider's catalog, keep the offer
+catalog:
+    dataspace/catalog
+
+# Consumer: negotiate a contract on an offer; with a purpose, ask for that use instead
+negotiate asset="gtfs-demo-transit" purpose="":
+    dataspace/negotiate {{asset}} {{purpose}}
+
+# Consumer: transfer under the contract and pull the data (into downloads/<asset>.zip)
+transfer asset="gtfs-demo-transit":
+    dataspace/transfer {{asset}}
+
+# Consumer as a provider: offer its tourist points of interest to the members
+publish-pois:
+    dataspace/publish-pois
+
+# Search the whole data space: the consumer's federated catalog (crawled from every member)
+federated-catalog:
+    dataspace/federated-catalog
+
+# The whole flow: onboard, publish, catalog, negotiate, transfer
+flow: onboard publish catalog negotiate transfer
+
+# Provider: get a Gaia-X compliance credential (mocked unless every GAIAX_* is set)
+gaiax:
+    dataspace/gaiax
+
+# Wait (up to 5 minutes) until every runtime answers, e.g. right after dev up
+wait:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for c in {{components}}; do
+        for i in $(seq 1 60); do
+            if curl -sf --max-time 3 "http://$c:8080/api/check/readiness" -o /dev/null; then break; fi
+            if [[ $i -eq 60 ]]; then echo "✗ $c did not start: docker compose logs $c (on the host)" >&2; exit 1; fi
+            sleep 5
+        done
+    done
+    echo "✓ every runtime is up"
+
+# Every data space component reports healthy (its readiness probe), and the Gaia-X mode
+health:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    failed=0
+    for c in {{components}}; do
+        if curl -fsS --max-time 3 "http://$c:8080/api/check/readiness" > /dev/null; then
+            echo "✓ $c"
+        else
+            echo "✗ $c (not ready: docker compose logs $c, from the project folder on the host)"; failed=1
+        fi
+    done
+    dataspace/gaiax --mode
+    exit "$failed"

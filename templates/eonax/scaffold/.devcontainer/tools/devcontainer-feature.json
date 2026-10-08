@@ -1,0 +1,6 @@
+{
+  "id": "tools",
+  "version": "1.0.0",
+  "name": "Data space workstation tools",
+  "description": "jq, to read the JSON-LD the connectors answer with."
+}

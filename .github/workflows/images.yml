@@ -17,7 +17,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0  # check-image-tags compares with the base commit
-      - run: shellcheck --severity=warning scripts/* tests/* images/*/validate images/*/entrypoint templates/*/adopt templates/*/test templates/*/scaffold/.devcontainer/*/install.sh
+      # Every shell script in templates/, found by its shebang or shellcheck directive.
+      - run: |
+          mapfile -t template_scripts < <(grep -rlE '^#!/(usr/)?bin/(env )?(ba)?sh|^# shellcheck shell=' templates)
+          shellcheck --severity=warning scripts/* tests/* images/*/validate images/*/entrypoint "${template_scripts[@]}"
       - name: Renovate annotations are readable
         run: tests/renovate
       - name: Changed images have a new tag
@@ -29,6 +32,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # the eonax step compares with the base commit
 
       # GHCR publishing is disabled unless the repository variable PUBLISH_IMAGES is "true".
       - uses: docker/login-action@v3
@@ -57,6 +62,26 @@ jobs:
 
       - name: dev behavior tests
         run: tests/dev
+
+      - name: Full data space test of eonax (only when something it uses changed)
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          PROJECTS_DIR: ${{ runner.temp }}/projects
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha || github.event.before }}"
+          # The template, plus what every project goes through: shared files, scripts, images, this workflow.
+          uses=(templates/eonax templates/_shared scripts images .github/workflows/images.yml)
+          if git diff --quiet "$base" -- "${uses[@]}"; then echo "nothing eonax uses changed: skipped"; exit 0; fi
+          scripts/new-project eonax ci-eonax-full
+          cd "$PROJECTS_DIR/ci-eonax-full"
+          "$GITHUB_WORKSPACE/scripts/dev" exec just test
+          "$GITHUB_WORKSPACE/scripts/dev" down
+          # The deploy profile: the hosted data space, from scratch, then its checks.
+          deploy/init
+          HTTPS_PORT=8443 HTTP_PORT=8081 deploy/up
+          HTTPS_PORT=8443 deploy/check
+          deploy/down
 
       - name: Generate and start a project from every template
         env:

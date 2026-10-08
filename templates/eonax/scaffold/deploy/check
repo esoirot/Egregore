@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Checks a running deploy profile (after deploy/up), from the host (needs curl):
+#   1. the trip planner answers over HTTPS, with the timetable; anything but GET is refused
+#   2. only caddy publishes a port
+#   3. a runtime's Vault token reads its participant's folder, not another's; no root token is kept
+#   4. 100 quick timetable requests make at most one pull through the data space
+#   5. the data space summary lists the offers and credentials, and no secret
+set -euo pipefail
+cd "$(dirname "$0")/.."
+source deploy/lib.sh
+port="${HTTPS_PORT:-}" # as given to deploy/up, else deploy/.env's
+set -a; source deploy/.env; set +a
+HTTPS_PORT="${port:-$HTTPS_PORT}"
+project="$(basename "$PWD")-deploy"
+site="https://$SITE_ADDRESS:$HTTPS_PORT"
+
+ca="$(mktemp)"
+trap 'rm -f "$ca"' EXIT
+if [[ "$SITE_ADDRESS" == localhost ]]; then compose exec -T caddy cat /data/caddy/pki/authorities/local/root.crt > "$ca"; fi
+json() { compose exec -T app jq "$@"; } # jq from the app's image: the host needs only Docker and curl
+get() { curl -sS --fail-with-body ${ca:+--cacert "$ca"} "$@"; }
+[[ -s "$ca" ]] || ca=""
+
+get "$site/" | grep -q "trip planner" || { echo "✗ no trip planner at $site/" >&2; exit 1; }
+get "$site/data/stops.txt" | grep -q "^stop_id" || { echo "✗ no timetable at $site/data/stops.txt" >&2; exit 1; }
+code="$(curl -sS -o /dev/null -w '%{http_code}' ${ca:+--cacert "$ca"} -X POST "$site/data/stops.txt")"
+[[ "$code" == 405 ]] || { echo "✗ a POST got $code, not 405" >&2; exit 1; }
+echo "✓ the trip planner and its timetable over HTTPS ($site), read only"
+
+published="$(docker ps --filter "label=com.docker.compose.project=$project" --format '{{.Label "com.docker.compose.service"}} {{.Ports}}' \
+    | grep -- '->' | cut -d' ' -f1 | sort -u | paste -sd' ')"
+[[ "$published" == caddy ]] || { echo "✗ published ports on: $published" >&2; exit 1; }
+echo "✓ only caddy publishes a port"
+
+vault() { # vault <token> <folder>: HTTP status reading that folder's encryption key
+    compose exec -T app curl -s -o /dev/null -w '%{http_code}' -H "X-Vault-Token: $1" "http://vault:8200/v1/secret/data/$2/aes-key-alias"
+}
+[[ "$(vault "$VAULT_TOKEN_PROVIDER_CONTROLPLANE" provider)" == 200 ]] || { echo "✗ the provider's token cannot read its folder" >&2; exit 1; }
+[[ "$(vault "$VAULT_TOKEN_PROVIDER_CONTROLPLANE" consumer)" == 403 ]] || { echo "✗ the provider's token reads the consumer's folder" >&2; exit 1; }
+if grep -q root_token deploy/secrets/init.json; then echo "✗ the root token is still kept" >&2; exit 1; fi
+echo "✓ Vault: each runtime its own folder only; root token revoked, unseal key in deploy/secrets/ ($(stat -c %a deploy/secrets))"
+
+pulls="$(for _ in $(seq 1 100); do get -o /dev/null -D - "$site/data/stops.txt" | tr -d '\r' | sed -n 's/^x-pulled-at: //Ip'; done | sort -u | wc -l)"
+[[ "$pulls" -le 2 ]] || { echo "✗ 100 requests made $pulls pulls" >&2; exit 1; } # 2: the 60 s window may roll over
+echo "✓ 100 timetable requests, $pulls pull(s) through the data space"
+
+status="$(get "$site/api/status")"
+json -e '[.offers[].assets[].id] | index("gtfs-demo-transit")' <<< "$status" > /dev/null || { echo "✗ status lists no GTFS offer: $status" >&2; exit 1; }
+json -e '[.credentials[].types] | flatten | index("MembershipCredential")' <<< "$status" > /dev/null || { echo "✗ status lists no membership" >&2; exit 1; }
+for s in "${SECRETS[@]}"; do
+    if grep -qF -- "${!s}" <<< "$status"; then echo "✗ the status shows $s" >&2; exit 1; fi
+done
+if grep -qi authorization <<< "$status"; then echo "✗ the status shows an access token" >&2; exit 1; fi
+echo "✓ the data space summary lists offers and credentials, and no secret"

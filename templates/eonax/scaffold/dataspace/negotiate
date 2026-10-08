@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Consumer: ask for a contract on an offer (just negotiate [asset] [purpose]). It sends the offer back
+# exactly as offered, rules included: the provider's agreement must match it, or the consumer rejects
+# it. Both connectors run the negotiation state machine (REQUESTED, AGREED, VERIFIED, FINALIZED);
+# FINALIZED gives a contract agreement id. The provider checks the rules against the consumer's
+# credentials (DCP). With a purpose, the consumer asks for that use instead of the offered one: a
+# counter-offer, which the provider refuses (try: just negotiate gtfs-demo-transit advertising).
+set -euo pipefail
+source "$(dirname "$0")/lib.sh"
+
+asset="${1:-$ASSET_ID}"
+purpose="${2:-}"
+need "offer.$asset.json" catalog
+
+# The offer's terms are ODRL; its rules name EDC terms as edc:<name> (e.g. edc:MembershipCredential).
+body="$(jq --slurpfile offer "$STATE/offer.$asset.json" --arg asset "$asset" --arg purpose "$purpose" '
+    .policy = ($offer[0] + {
+        "@context": ["http://www.w3.org/ns/odrl.jsonld", {"edc": "https://w3id.org/edc/v0.0.1/ns/"}],
+        assigner: .policy.assigner, target: $asset})
+    | if $purpose == "" then . else
+        (.policy | .. | objects | select(.leftOperand? | tostring | test("^(odrl:)?purpose$")) | .rightOperand) |= $purpose end' \
+    "$REQUESTS/contract-request.json")"
+response="$(management consumer POST /v3/contractnegotiations "$body")" || { echo "Refused: $response" >&2; exit 1; }
+negotiation="$(jq -r '.["@id"]' <<< "$response")"
+echo "Negotiation $negotiation started${purpose:+ (asking for purpose '$purpose')}"
+wait_for_state consumer "/v3/contractnegotiations/$negotiation" FINALIZED
+agreement="$(management consumer GET "/v3/contractnegotiations/$negotiation" | jq -r '.contractAgreementId')"
+echo "$agreement" > "$STATE/agreement-id.$asset"
+echo "✓ FINALIZED: contract agreement $agreement. Next: just transfer $asset"

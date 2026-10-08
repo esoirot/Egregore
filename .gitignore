@@ -12,3 +12,7 @@
 # Temporary files
 *.tmp
 *.log
+
+# Gradle output from compiling template code (never part of a template)
+templates/*/starter/**/build/
+templates/*/starter/**/.gradle/

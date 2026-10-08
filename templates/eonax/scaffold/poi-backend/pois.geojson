@@ -1,0 +1,10 @@
+{
+  "type": "FeatureCollection",
+  "name": "Demo tourist points of interest (synthetic sample)",
+  "features": [
+    { "type": "Feature", "properties": { "id": "P1", "name": "Opera house", "category": "culture" }, "geometry": { "type": "Point", "coordinates": [2.3317, 48.8720] } },
+    { "type": "Feature", "properties": { "id": "P2", "name": "Market hall", "category": "food" }, "geometry": { "type": "Point", "coordinates": [2.3470, 48.8620] } },
+    { "type": "Feature", "properties": { "id": "P3", "name": "Harbour viewpoint", "category": "viewpoint" }, "geometry": { "type": "Point", "coordinates": [2.3691, 48.8510] } },
+    { "type": "Feature", "properties": { "id": "P4", "name": "Botanical garden", "category": "nature" }, "geometry": { "type": "Point", "coordinates": [2.3590, 48.8440] } }
+  ]
+}

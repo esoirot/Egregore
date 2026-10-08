@@ -1,0 +1,22 @@
+{
+  "participantContextId": "set by dataspace/identity: provider or consumer",
+  "did": "set by dataspace/identity: did:web:<participant>-identityhub%3A7083:<participant>",
+  "active": true,
+  "key": {
+    "keyId": "set by dataspace/identity: <did>#key-1",
+    "privateKeyAlias": "set by dataspace/identity: <did>#key-1",
+    "keyGeneratorParams": { "algorithm": "EC" }
+  },
+  "serviceEndpoints": [
+    {
+      "id": "credential-service",
+      "type": "CredentialService",
+      "serviceEndpoint": "set by dataspace/identity: http://<participant>-identityhub:7082/api/credentials/v1/participants/<participant>"
+    },
+    {
+      "id": "dsp",
+      "type": "ProtocolEndpoint",
+      "serviceEndpoint": "set by dataspace/identity: http://<participant>-controlplane:8082/protocol/2025-1"
+    }
+  ]
+}

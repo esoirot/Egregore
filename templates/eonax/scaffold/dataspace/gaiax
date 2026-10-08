@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Gaia-X compliance for the provider (just gaiax): the GXDCH checks its legal identity (legal person,
+# registration number from a notary, acceptance of the Gaia-X Terms and Conditions) and returns a
+# compliance credential (gx:LabelCredential), stored in the provider's wallet.
+#
+# One client (connector/gaiax), two settings:
+#   REAL  every GAIAX_* variable set (see the env file of the template, or .env): the real GXDCH
+#   MOCK  none set: gaiax-mock/mock.env, and the mock publishes the did.json (gaiax-mock/README.md)
+#   a partial set is refused, listing what is missing: never half real, half mock.
+set -euo pipefail
+source "$(dirname "$0")/lib.sh"
+
+required=(GAIAX_DID GAIAX_SIGNING_KEY GAIAX_CERT_CHAIN_URL GAIAX_COMPLIANCE_URL GAIAX_NOTARY_URL
+          GAIAX_LEGAL_NAME GAIAX_REGISTRATION_NUMBER GAIAX_COUNTRY_CODE)
+missing=()
+for v in "${required[@]}"; do if [[ -z "${!v:-}" ]]; then missing+=("$v"); fi; done
+
+if [[ "${1:-}" == --mode ]]; then # just health: only say which mode
+    if [[ ${#missing[@]} -eq ${#required[@]} ]]; then echo "Gaia-X: MOCK (set every GAIAX_* for the real GXDCH)"
+    elif [[ ${#missing[@]} -gt 0 ]]; then echo "Gaia-X: partial configuration, missing: ${missing[*]}"
+    else echo "Gaia-X: REAL ($GAIAX_COMPLIANCE_URL)"; fi
+    exit 0
+fi
+
+if [[ ${#missing[@]} -eq ${#required[@]} ]]; then
+    mode=MOCK
+    # shellcheck source=/dev/null  # the mock's settings, kept in its own folder
+    source gaiax-mock/mock.env
+    key_file="$STATE/gaiax/mock-signing-key.pem"
+    mkdir -p "$STATE/gaiax"
+    if [[ ! -s "$key_file" ]]; then
+        openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$key_file" 2> /dev/null
+    fi
+    GAIAX_SIGNING_KEY="$(cat "$key_file")"
+elif [[ ${#missing[@]} -gt 0 ]]; then
+    echo "Gaia-X: partial configuration refused. Set all of these, or none (mock): ${missing[*]}" >&2
+    exit 1
+else
+    mode=REAL
+fi
+# The notary's registration types (GXDCH notary v2): <type>:<number>.
+case "${GAIAX_REGISTRATION_NUMBER%%:*}" in
+    vat-id | lei-code | eori) ;;
+    *) echo "Gaia-X: GAIAX_REGISTRATION_NUMBER must be vat-id:<n>, lei-code:<n> or eori:<n>, not: $GAIAX_REGISTRATION_NUMBER" >&2; exit 1 ;;
+esac
+echo "Gaia-X: $mode (compliance at $GAIAX_COMPLIANCE_URL)"
+
+export GAIAX_DID GAIAX_SIGNING_KEY GAIAX_CERT_CHAIN_URL GAIAX_COMPLIANCE_URL GAIAX_NOTARY_URL \
+    GAIAX_LEGAL_NAME GAIAX_REGISTRATION_NUMBER GAIAX_COUNTRY_CODE GAIAX_DID_WEB_USE_HTTP
+export GAIAX_OUTPUT="$PWD/$STATE/gaiax"
+export GAIAX_WALLET_URL; GAIAX_WALLET_URL="$(identity_api provider)"
+export GAIAX_WALLET_KEY="$IDENTITYHUB_KEY" GAIAX_WALLET_PARTICIPANT=provider
+client() { (cd connector && gradle --quiet :gaiax:run --args="$1"); }
+
+client did-document
+if [[ "$mode" == MOCK ]]; then gaiax-mock/publish-did "$GAIAX_OUTPUT/did.json"; fi
+client comply

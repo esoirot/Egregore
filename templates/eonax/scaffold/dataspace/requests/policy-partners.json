@@ -1,0 +1,14 @@
+{
+  "@context": { "@vocab": "https://w3id.org/edc/v0.0.1/ns/" },
+  "@id": "partners-only",
+  "policy": {
+    "@context": "http://www.w3.org/ns/odrl.jsonld",
+    "@type": "Set",
+    "permission": [
+      {
+        "action": "use",
+        "constraint": { "leftOperand": "PartnerCredential", "operator": "eq", "rightOperand": "active" }
+      }
+    ]
+  }
+}

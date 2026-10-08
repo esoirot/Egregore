@@ -142,6 +142,7 @@ One directory per stack preset, with no image of its own:
 
 | Template | Stack | Notes |
 | -------- | ----- | ----- |
+| `eonax` | Eclipse Dataspace Components 0.18.1 (connectors, Identity Hub, Issuer Service) on JDK 21.0.12 (Corretto in the dev container, Temurin in the images), Gradle 9.8.0, Postgres 18.6, Vault 2.1.1 | A training data space shaped like EONA-X (mobility, transport, tourism), in 7 chapters (its project README): connectors and the Dataspace Protocol, DCP identity and membership credentials, ODRL usage policies (purpose, time window), a federated catalog, Gaia-X compliance (a GXDCH mock unless every `GAIAX_*` is set; real mode is tested against the GXDCH lab notary only, not its compliance service), and a consumer app (`just dev`). `just test` runs it all end to end. Kubernetes-ready by design (one image per component, configuration from the environment). `deploy/` hosts it for learners to look at (random secrets, HTTPS only through Caddy, least-privilege Vault tokens, no dev container or mock). First `dev up` builds every image (several minutes); needs about 6 GB of RAM. |
 | `fastapi` | Python 3.14.8, FastAPI 0.142.2, uv 0.12.23, pytest, ruff | Local `uv` feature installs uv and bakes Python into the image (no compile, about 10 s). Ships a working app (`/`, `/health`) and tests; `postCreateCommand` runs `just install` (`uv sync`, creates `uv.lock`). Python 3.15 is not final yet (rc), so 3.14 is the latest stable. Ships a production `Dockerfile` stub. |
 | `java`   | JDK 27.0.0 (Amazon Corretto), Gradle 9.8.0, JUnit 6 (Jupiter) | Official `java` feature (SDKMAN). Plain Java, no framework. On first `dev up`, `just init` runs `gradle init` (Java application, Kotlin DSL, wrapper pinned to 9.8.0, toolchain 27). Corretto because SDKMAN has no Temurin build of 27. Ships a production `Dockerfile` stub. |
 | `node`   | Node 26.10.0, pnpm 12.9.1, Biome 2.5.15 | Official `node` feature. Ships a working app on Node built-ins (`node:http`, `/` and `/health`) and tests (`node:test`); Biome for lint and format. `postCreateCommand` runs `just install` (creates `pnpm-lock.yaml`). Ships a production `Dockerfile` stub. |
@@ -427,8 +428,9 @@ dev down && dev up
 * **edited by you** → kept; the new version is written next to it as `<file>.template-new` and listed as a conflict (if the template did not change that file, nothing happens)
 * **new in the template** → added
 * **deleted by you** → stays deleted
+* **not recorded** (the repository's own file) → left alone
 
-The `adopt` hook runs again, so versions and build tools taken from the repository (`.ruby-version`, `pom.xml`, …) are kept. `starter/` files (the sample app) are yours after creation and never updated. Projects created before `template.lock` existed must be updated by hand.
+The `adopt` hook runs again, so versions and build tools taken from the repository (`.ruby-version`, `pom.xml`, …) are kept. `starter/` files (the sample app) are yours after creation and never updated. A template whose sample code must follow template fixes (`eonax`: connector, course scripts, app, README) keeps it in `scaffold/` instead. Projects created before `template.lock` existed must be updated by hand.
 
 ## Version updates (Renovate)
 
@@ -466,6 +468,7 @@ A template is a `templates/<name>/` directory with a `scaffold/` and, usually, a
 templates/go/
 ├── scaffold/                 # dev environment, always copied (on top of templates/_shared/)
 │   ├── .devcontainer/devcontainer.json
+│   ├── compose.template.yaml # optional, the template's own services (included by compose.yaml)
 │   ├── justfile
 │   └── .gitignore
 ├── starter/                  # sample project, new projects only
@@ -475,6 +478,7 @@ templates/go/
 ├── adopt                     # optional, for new-project --from and dev update
 ├── test                      # optional, scenarios for adopt (run by tests/new-project)
 ├── vscode-extensions         # for --ide=vscode
+├── env                       # optional, the template's own variables (appended to .env.example)
 ├── env-skip                  # optional
 └── port                      # optional, the app's container port (default 3000)
 ```
@@ -486,8 +490,10 @@ Start from `templates/node/` and change:
 * `compose.yaml` and `.env.example` come from `templates/_shared/`. The app listens on port 3000 in the container; if the stack needs another port, write it in an optional `port` file (one number, e.g. `8000`) and use `{{PORT}}` in the `dev` recipe. The host side stays `APP_PORT` (default 3000).
 * `starter/`: a minimal working app with a test, the production `Dockerfile` stub, the README. Files that only fit the sample app belong here, not in `scaffold/`.
 * optional `adopt` (executable): called as `adopt <project-dir>` by `new-project` (only when it copied `devcontainer.json`) and by `dev update`, to match the feature version to the repository's version file (see `templates/rails/adopt`) or its build tool (see `templates/java/adopt`). It must be idempotent.
+* optional `scaffold/compose.template.yaml`: services the stack needs besides `dev` (e.g. the components of a multi-container system). `new-project` adds it to the project's `include:` (before `--with` services); placeholders work in it, and `dev update` tracks it. Keep `compose.yaml` itself shared.
 * optional `test`: given/when/then scenarios for `adopt` (and `env-skip`), sourced by `tests/new-project`; see `templates/java/test`.
 * `vscode-extensions`: one VS Code extension id per line, for `--ide=vscode`.
+* optional `env`: the template's own variables (`NAME=value` lines and comments), appended to the project's `.env.example` after the shared ones, so they reach `.env` too; `dev update` tracks them.
 * optional `env-skip`: service variables (from `services/*/env`) not to write into this template's projects (see `templates/rails/env-skip`).
 
 Pin every version, and let Renovate find each pin no built-in manager knows (feature options, versions in `install.sh` or the `justfile`) with a comment on the line just above it; the version is the first number on the next line not glued to a letter (`"python3": "3.14"` reads `3.14`; `v1.2` is not read). `tests/renovate` checks every such comment in seconds. No change to `renovate.json`:

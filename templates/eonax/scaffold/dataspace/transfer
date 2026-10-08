@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Consumer: start a transfer under the agreement, then pull the data (just transfer [asset]):
+#   1. the control planes agree on the transfer process (it reaches STARTED); the provider checks the
+#      contract's time window here, at use time (edc:inForceDate)
+#   2. the provider's data plane issues an EDR (Endpoint Data Reference): an endpoint + a short-lived token
+#   3. the consumer calls that endpoint with the token; the provider's data plane fetches the real data
+#      from its backend (the asset's dataAddress) and streams it back. The consumer never sees the backend.
+# While the transfer runs, the provider's policy monitor stops it when the contract ends.
+set -euo pipefail
+source "$(dirname "$0")/lib.sh"
+
+asset="${1:-$ASSET_ID}"
+need "agreement-id.$asset" negotiate
+
+body="$(jq --arg id "$(cat "$STATE/agreement-id.$asset")" '.contractId = $id' "$REQUESTS/transfer-request.json")"
+response="$(management consumer POST /v3/transferprocesses "$body")" || { echo "Refused: $response" >&2; exit 1; }
+transfer="$(jq -r '.["@id"]' <<< "$response")"
+echo "$transfer" > "$STATE/transfer-id.$asset"
+echo "Transfer process $transfer started"
+wait_for_state consumer "/v3/transferprocesses/$transfer" STARTED
+
+# The EDR arrives asynchronously after STARTED: retry briefly.
+for _ in $(seq 1 60); do
+    if management consumer GET "/v3/edrs/$transfer/dataaddress" > "$STATE/edr.$asset.json" 2> /dev/null; then break; fi
+    sleep 1
+done
+endpoint="$(jq -r '.endpoint' "$STATE/edr.$asset.json")"
+token="$(jq -r '.authorization' "$STATE/edr.$asset.json")"
+echo "EDR: endpoint $endpoint (token in $STATE/edr.$asset.json)"
+
+mkdir -p downloads
+curl -sS --fail-with-body -H "Authorization: $token" "$endpoint" -o "downloads/$asset.zip"
+echo "✓ downloads/$asset.zip ($(wc -c < "downloads/$asset.zip") bytes):"
+jar tf "downloads/$asset.zip" | sed 's/^/    /'

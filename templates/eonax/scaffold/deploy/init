@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Deploy profile, step 1: writes deploy/.env (owner only) with a random value for every secret, plus
+# the site settings. Never changes a value already there: run it again after an update, it only adds.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+source deploy/lib.sh
+
+random() { head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n'; }
+add() { # add <name> <value>: only if deploy/.env lacks it
+    if ! grep -q "^$1=" deploy/.env; then echo "$1=$2" >> deploy/.env; echo "  $1"; fi
+}
+
+umask 077
+touch deploy/.env
+chmod 600 deploy/.env
+mkdir -p deploy/secrets # Vault's unseal key, written by vault-seed (owner only)
+chmod 700 deploy/secrets
+
+echo "deploy/.env, added:"
+for s in "${SECRETS[@]}"; do
+    case "$s" in
+        *_SUPERUSER_KEY) add "$s" "$(printf super-user | base64).$(random | base64 -w0)" ;; # <id>.<secret>, both base64
+        *) add "$s" "$(random)" ;;
+    esac
+done
+add SITE_ADDRESS localhost # your domain for a real certificate (Let's Encrypt), else Caddy's own CA
+add HTTPS_PORT 443
+add HTTP_PORT 80
+echo "Next: deploy/up"

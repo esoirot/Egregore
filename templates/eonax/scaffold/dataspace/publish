@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Provider: publish the GTFS timetable, for members only. Objects in its control plane:
+#   CEL expressions     how to check a rule: "MembershipCredential" holds when the other side presents
+#                       a valid one from the authority; "purpose" must be mobility or tourism
+#   policy definitions  the rules: members-only (who sees the offers), gtfs-contract (members, for
+#                       mobility use, 1 day from signing), expired-contract and 30s-contract (time
+#                       window demos), partners-only (PartnerCredential, held by nobody)
+#   assets              what it offers, and where the data really lives (dataAddress, never shown)
+#   contract definitions which assets, under which access policy (who sees the offer in the catalog)
+#                       and which contract policy (who may sign a contract)
+# The partners-only offer needs a PartnerCredential, which nobody holds: no consumer ever sees it.
+# Publishing again changes nothing (an object that exists is kept).
+set -euo pipefail
+source "$(dirname "$0")/lib.sh"
+
+key="X-Api-Key: ${PROVIDER_API_KEY:-provider-api-key}"
+post() { # post <path> <request-file>
+    create "$PROVIDER_MANAGEMENT$1" "$key" "$(cat "$REQUESTS/$2")" "$2"
+}
+
+post /v5beta/celexpressions cel-membership.json
+post /v5beta/celexpressions cel-partner.json
+post /v5beta/celexpressions cel-purpose.json
+for p in policy policy-gtfs-contract policy-expired policy-30s policy-partners; do
+    post /v3/policydefinitions "$p.json"
+done
+post /v3/assets asset.json
+post /v3/assets asset-partners.json
+post /v3/contractdefinitions contract-definition.json
+post /v3/contractdefinitions contract-definition-partners.json
+
+# Time window demos: the same timetable under contracts that end (see policy-expired.json, policy-30s.json).
+for demo in expired:expired-contract 30s:30s-contract; do
+    asset="gtfs-${demo%%:*}"
+    create "$PROVIDER_MANAGEMENT/v3/assets" "$key" \
+        "$(jq --arg id "$asset" '.["@id"] = $id | .properties.name += " (\($id | ltrimstr("gtfs-")) contract)"' "$REQUESTS/asset.json")" "asset $asset"
+    create "$PROVIDER_MANAGEMENT/v3/contractdefinitions" "$key" \
+        "$(jq --arg id "$asset" --arg policy "${demo#*:}" '.["@id"] = "\($id)-offer" | .contractPolicyId = $policy
+            | .assetsSelector[0].operandRight = $id' "$REQUESTS/contract-definition.json")" "offer $asset"
+done
+echo "The provider offers '$ASSET_ID' to members. Next: just catalog"

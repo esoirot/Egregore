@@ -1,0 +1,14 @@
+{
+  "@context": { "@vocab": "https://w3id.org/edc/v0.0.1/ns/" },
+  "@id": "tourism-pois",
+  "properties": {
+    "name": "Demo tourist points of interest (GeoJSON)",
+    "description": "Sights, food and viewpoints near the Demo Transit line",
+    "contenttype": "application/geo+json"
+  },
+  "dataAddress": {
+    "@type": "DataAddress",
+    "type": "HttpData",
+    "baseUrl": "http://poi-backend:8000/pois.geojson"
+  }
+}

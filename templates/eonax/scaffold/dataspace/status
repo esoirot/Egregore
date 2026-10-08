@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# A read-only summary of the data space, as JSON (the app's /api/status, its "data space" panel):
+#   offers       what the consumer's federated catalog lists, per member: asset id and name
+#   credentials  the consumer's wallet: each credential's types and issuer
+#   transfer     the timetable's current transfer: id and state
+# Only those fields, picked one by one: no key, token, EDR or address leaves through it.
+set -euo pipefail
+source "$(dirname "$0")/lib.sh"
+
+offers="$(management consumer POST /v3/catalogs/request "$(cat "$REQUESTS/catalogs-query.json")" \
+    | jq '[.[] | {member: (.participantId // .["dspace:participantId"] // "?"),
+                  assets: [[.dataset // .["dcat:dataset"]] | flatten | map(select(. != null)) | .[]
+                           | {id: .["@id"], name: (.name // .["edc:name"] // "")}]}]')"
+credentials="$(curl -sS --fail-with-body -H "x-api-key: $IDENTITYHUB_KEY" "$(identity_api consumer)/consumer/credentials" \
+    | jq '[.[] | .verifiableCredential.credential | {types: .type, issuer: (.issuer.id // .issuer)}]')"
+transfer=null
+if [[ -s "$STATE/transfer-id.$ASSET_ID" ]]; then
+    id="$(cat "$STATE/transfer-id.$ASSET_ID")"
+    transfer="$(management consumer GET "/v3/transferprocesses/$id" | jq --arg id "$id" '{id: $id, state: .state}')"
+fi
+jq -n --argjson offers "$offers" --argjson credentials "$credentials" --argjson transfer "$transfer" \
+    '{offers: $offers, credentials: $credentials, transfer: $transfer}'

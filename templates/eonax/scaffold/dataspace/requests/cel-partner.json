@@ -1,0 +1,9 @@
+{
+  "@context": ["https://w3id.org/edc/connector/management/v2"],
+  "@type": "CelExpression",
+  "@id": "partner-cel",
+  "leftOperand": "https://w3id.org/edc/v0.0.1/ns/PartnerCredential",
+  "description": "True when the other side presents a PartnerCredential (nobody holds one in this data space)",
+  "scopes": ["catalog", "contract.negotiation", "transfer.process"],
+  "expression": "ctx.agent.claims.vc.exists(c, c.type.exists(t, t.contains('PartnerCredential')))"
+}

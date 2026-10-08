@@ -84,12 +84,12 @@
       "groupName": "{{lookup (split packageFile '/') 1}} template"
     },
     {
-      "description": "Template placeholders are not images",
+      "description": "The shared compose.yaml holds the {{IMAGE}} placeholder, not an image (template compose.template.yaml files are tracked)",
       "matchManagers": [
         "docker-compose"
       ],
       "matchFileNames": [
-        "templates/**"
+        "templates/_shared/compose.yaml"
       ],
       "enabled": false
     }

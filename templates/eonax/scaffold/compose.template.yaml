@@ -1,0 +1,285 @@
+# The data space, next to the dev container (included by compose.yaml).
+# Kubernetes-ready (README, "Kubernetes-ready rules"): one process per container, images built from a
+# Dockerfile or pinned by digest, configuration and secrets from the environment only, services found
+# by name, a healthcheck each, state only in Postgres. Nothing here depends on the dev container.
+#
+# Identities (did:web, resolved over HTTP inside this network):
+#   authority  did:web:issuerservice%3A10016:issuer             -> http://issuerservice:10016/issuer/did.json
+#   provider   did:web:provider-identityhub%3A7083:provider     -> http://provider-identityhub:7083/provider/did.json
+#   consumer   did:web:consumer-identityhub%3A7083:consumer     -> http://consumer-identityhub:7083/consumer/did.json
+
+x-runtime: &runtime
+  restart: unless-stopped # any start order works: a runtime that starts before Postgres restarts
+  depends_on:
+    edc-postgres:
+      condition: service_healthy
+    vault-seed:
+      condition: service_completed_successfully
+  healthcheck:
+    test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/check/readiness"]
+    interval: 5s
+    timeout: 3s
+    retries: 30
+    start_period: 30s
+
+x-runtime-env: &runtime-env
+  WEB_HTTP_PORT: "8080" # default API: health probes (/api/check/readiness, /liveness, /health)
+  WEB_HTTP_PATH: /api
+  EDC_DATASOURCE_DEFAULT_USER: ${EDC_DB_USER:-edc}
+  EDC_DATASOURCE_DEFAULT_PASSWORD: ${EDC_DB_PASSWORD:-edc}
+  EDC_SQL_SCHEMA_AUTOCREATE: "true"
+  EDC_VAULT_HASHICORP_URL: http://vault:8200 # secrets (keys, tokens): one folder per participant
+  # EDC_VAULT_HASHICORP_TOKEN: set per runtime below, its own token (reaches its participant's folder only)
+  EDC_ENCRYPTION_AES_KEY_ALIAS: aes-key-alias # put in each folder by vault-seed
+  EDC_IAM_DID_WEB_USE_HTTPS: "false" # did:web over plain HTTP inside this network (production: HTTPS)
+  EDC_IAM_CREDENTIAL_REVOCATION_MIMETYPE: application/json
+
+x-controlplane-env: &controlplane-env
+  <<: *runtime-env
+  WEB_HTTP_CONTROL_PORT: "8083" # control API: control plane <-> data plane
+  WEB_HTTP_CONTROL_PATH: /control
+  WEB_HTTP_MANAGEMENT_PORT: "8081" # management API: your requests (assets, policies, negotiations)
+  WEB_HTTP_MANAGEMENT_PATH: /management
+  WEB_HTTP_PROTOCOL_PORT: "8082" # Dataspace Protocol: connector <-> connector
+  WEB_HTTP_PROTOCOL_PATH: /protocol
+  WEB_HTTP_MANAGEMENT_AUTH_TYPE: tokenbased # requests need the header X-Api-Key
+  # The policy monitor re-checks running transfers against their contract (e.g. its end date):
+  # every 10 s here, to see it act; EDC's default is 1 hour.
+  EDC_POLICY_MONITOR_PERIOD: PT10S
+  # Federated catalog: every control plane crawls the members' catalogs into its own cache
+  # (query: /management/v3/catalogs/request). Members by DID; their DID documents say where to crawl.
+  EONAX_CATALOG_PARTICIPANTS: did:web:provider-identityhub%3A7083:provider,did:web:consumer-identityhub%3A7083:consumer
+  EDC_CATALOG_CACHE_EXECUTION_DELAY_SECONDS: "10"
+  EDC_CATALOG_CACHE_EXECUTION_PERIOD_SECONDS: "15"
+  # Trust (DCP): only credentials signed by the authority count...
+  EDC_IAM_TRUSTED-ISSUER_AUTHORITY_ID: did:web:issuerservice%3A10016:issuer
+  # ...and every request asks the other side to present its MembershipCredential.
+  EDC_IAM_DCP_SCOPES_MEMBERSHIP_ID: membership-scope
+  EDC_IAM_DCP_SCOPES_MEMBERSHIP_TYPE: DEFAULT
+  EDC_IAM_DCP_SCOPES_MEMBERSHIP_VALUE: org.eclipse.dspace.dcp.vc.type:MembershipCredential:read
+
+x-dataplane-env: &dataplane-env
+  <<: *runtime-env
+  WEB_HTTP_CONTROL_PORT: "8083"
+  WEB_HTTP_CONTROL_PATH: /control
+  WEB_HTTP_PUBLIC_PORT: "8085" # public API: where a consumer pulls the data
+  WEB_HTTP_PUBLIC_PATH: /public
+  EDC_TRANSFER_PROXY_TOKEN_SIGNER_PRIVATEKEY_ALIAS: transfer-proxy-private-key
+  EDC_TRANSFER_PROXY_TOKEN_VERIFIER_PUBLICKEY_ALIAS: transfer-proxy-public-key
+
+x-identityhub-env: &identityhub-env
+  <<: *runtime-env
+  WEB_HTTP_IDENTITY_PORT: "7081" # Identity API: participant contexts, keys, credential requests (just identity, membership)
+  WEB_HTTP_IDENTITY_PATH: /api/identity
+  WEB_HTTP_CREDENTIALS_PORT: "7082" # Credential Service (DCP): presents credentials to verifiers, receives issued ones
+  WEB_HTTP_CREDENTIALS_PATH: /api/credentials
+  WEB_HTTP_DID_PORT: "7083" # serves the did:web documents
+  WEB_HTTP_DID_PATH: /
+  WEB_HTTP_STS_PORT: "7084" # Secure Token Service: self-issued tokens for its connector
+  WEB_HTTP_STS_PATH: /api/sts
+  EDC_IH_API_SUPERUSER_KEY: ${IDENTITYHUB_SUPERUSER_KEY:-c3VwZXItdXNlcg==.c3VwZXItc2VjcmV0LWtleQo=}
+  EDC_IAM_ACCESSTOKEN_JTI_VALIDATION: "true"
+
+services:
+  edc-postgres:
+    image: postgres:18.6@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5ea167f298f2da9722
+    environment:
+      POSTGRES_USER: ${EDC_DB_USER:-edc}
+      POSTGRES_PASSWORD: ${EDC_DB_PASSWORD:-edc}
+    volumes:
+      - edc-postgres-data:/var/lib/postgresql
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # A real Vault server, its data in a named volume: keys and identities survive dev down / dev up
+  # (Postgres keeps the identities' records, Vault their private keys: both must persist).
+  # vault-seed unseals it at each start. Production: auto-unseal (cloud KMS) or Kubernetes Secrets;
+  # the runtimes only need EDC_VAULT_HASHICORP_URL and their _TOKEN changed.
+  vault:
+    image: hashicorp/vault:2.1.1@sha256:47f14a6acb98f48d798a07df7c83f23a6e636e1cf724c5f8ff165cb32667a1e2
+    command: server
+    restart: unless-stopped
+    environment:
+      VAULT_LOCAL_CONFIG: '{"storage": {"file": {"path": "/vault/file"}}, "listener": [{"tcp": {"address": "0.0.0.0:8200", "tls_disable": true}}], "disable_mlock": true, "ui": false}'
+    volumes:
+      - vault-data:/vault/file
+    healthcheck: # up, even sealed: vault-seed unseals it
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8200/v1/sys/health?uninitcode=200&sealedcode=200"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Runs at each dev up: initializes Vault once, unseals it, makes sure each runtime's token (its
+  # folder only) and the secrets below exist (vault-seed/seed.sh). Its unseal key and root token live
+  # in the vault-init volume: a dev shortcut (the deploy profile keeps them out of Docker volumes).
+  vault-seed:
+    build: vault-seed
+    labels:
+      eonax.role: job
+    depends_on:
+      vault:
+        condition: service_healthy
+    volumes:
+      - vault-init:/vault-init
+    environment:
+      VAULT_ADDR: http://vault:8200
+      # <runtime token>:<its folder>, one per runtime below (an encryption key per folder)
+      RUNTIMES: >-
+        ${VAULT_TOKEN_ISSUERSERVICE:-dev-issuerservice-token}:issuer
+        ${VAULT_TOKEN_PROVIDER_IDENTITYHUB:-dev-provider-identityhub-token}:provider
+        ${VAULT_TOKEN_PROVIDER_CONTROLPLANE:-dev-provider-controlplane-token}:provider
+        ${VAULT_TOKEN_PROVIDER_DATAPLANE:-dev-provider-dataplane-token}:provider
+        ${VAULT_TOKEN_CONSUMER_IDENTITYHUB:-dev-consumer-identityhub-token}:consumer
+        ${VAULT_TOKEN_CONSUMER_CONTROLPLANE:-dev-consumer-controlplane-token}:consumer
+        ${VAULT_TOKEN_CONSUMER_DATAPLANE:-dev-consumer-dataplane-token}:consumer
+      PARTICIPANTS: provider consumer # transfer token keys each (their data planes)
+
+  # The provider's own system holding the data (not part of the data space).
+  gtfs-backend:
+    build: gtfs-backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/gtfs.zip')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # The consumer's own system holding its data (it offers it to the other members too).
+  poi-backend:
+    build: poi-backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/pois.geojson')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # MOCK of the Gaia-X Digital Clearing House (gaiax-mock/README.md). Starts only with the profile
+  # gaiax-mock (COMPOSE_PROFILES in .env): remove it there when you use the real GXDCH.
+  gaiax-mock:
+    build: gaiax-mock
+    profiles: ["gaiax-mock"]
+    restart: unless-stopped
+    environment:
+      MOCK_HOST: gaiax-mock:8080
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # The authority: registers members and issues their MembershipCredential (just authority).
+  issuerservice:
+    <<: *runtime
+    build: { context: connector, args: { MODULE: issuerservice } }
+    environment:
+      <<: *runtime-env
+      EDC_HOSTNAME: issuerservice
+      EDC_VAULT_HASHICORP_TOKEN: ${VAULT_TOKEN_ISSUERSERVICE:-dev-issuerservice-token}
+      EDC_VAULT_HASHICORP_FOLDER: issuer
+      EDC_DATASOURCE_DEFAULT_URL: jdbc:postgresql://edc-postgres:5432/issuerservice
+      WEB_HTTP_STS_PORT: "10011"
+      WEB_HTTP_STS_PATH: /api/sts
+      WEB_HTTP_ISSUANCE_PORT: "10012" # DCP issuance: holders ask for credentials here
+      WEB_HTTP_ISSUANCE_PATH: /api/issuance
+      WEB_HTTP_ISSUERADMIN_PORT: "10013" # admin API: holders, attestations, credential definitions
+      WEB_HTTP_ISSUERADMIN_PATH: /api/admin
+      WEB_HTTP_IDENTITY_PORT: "10015"
+      WEB_HTTP_IDENTITY_PATH: /api/identity
+      WEB_HTTP_DID_PORT: "10016"
+      WEB_HTTP_DID_PATH: /
+      WEB_HTTP_STATUSLIST_PORT: "9999" # credential status (revocation) lists
+      WEB_HTTP_STATUSLIST_PATH: /statuslist
+      EDC_ISSUER_STATUSLIST_SIGNING_KEY_ALIAS: statuslist-signing-key
+      EDC_IH_API_SUPERUSER_KEY: ${ISSUER_SUPERUSER_KEY:-c3VwZXItdXNlcg==.c3VwZXItc2VjcmV0LWtleQo=}
+      EDC_IAM_ACCESSTOKEN_JTI_VALIDATION: "true"
+
+  provider-identityhub:
+    <<: *runtime
+    build: { context: connector, args: { MODULE: identityhub } }
+    environment:
+      <<: *identityhub-env
+      EDC_HOSTNAME: provider-identityhub
+      EDC_VAULT_HASHICORP_TOKEN: ${VAULT_TOKEN_PROVIDER_IDENTITYHUB:-dev-provider-identityhub-token}
+      EDC_VAULT_HASHICORP_FOLDER: provider
+      EDC_DATASOURCE_DEFAULT_URL: jdbc:postgresql://edc-postgres:5432/provider_identityhub
+
+  provider-controlplane:
+    <<: *runtime
+    build: { context: connector, args: { MODULE: controlplane } }
+    environment:
+      <<: *controlplane-env
+      EDC_PARTICIPANT_ID: did:web:provider-identityhub%3A7083:provider
+      EDC_HOSTNAME: provider-controlplane
+      EDC_VAULT_HASHICORP_TOKEN: ${VAULT_TOKEN_PROVIDER_CONTROLPLANE:-dev-provider-controlplane-token}
+      EDC_VAULT_HASHICORP_FOLDER: provider
+      WEB_HTTP_MANAGEMENT_AUTH_KEY: ${PROVIDER_API_KEY:-provider-api-key}
+      EDC_DSP_CALLBACK_ADDRESS: http://provider-controlplane:8082/protocol
+      EDC_DATASOURCE_DEFAULT_URL: jdbc:postgresql://edc-postgres:5432/provider_controlplane
+      # Its tokens come from its Identity Hub's STS (client secret: written to Vault by just identity).
+      EDC_IAM_STS_OAUTH_TOKEN_URL: http://provider-identityhub:7084/api/sts/token
+      EDC_IAM_STS_OAUTH_CLIENT_ID: did:web:provider-identityhub%3A7083:provider
+      EDC_IAM_STS_OAUTH_CLIENT_SECRET_ALIAS: provider-sts-client-secret
+
+  provider-dataplane:
+    <<: *runtime
+    build: { context: connector, args: { MODULE: dataplane } }
+    environment:
+      <<: *dataplane-env
+      EDC_PARTICIPANT_ID: did:web:provider-identityhub%3A7083:provider
+      EDC_HOSTNAME: provider-dataplane
+      EDC_VAULT_HASHICORP_TOKEN: ${VAULT_TOKEN_PROVIDER_DATAPLANE:-dev-provider-dataplane-token}
+      EDC_VAULT_HASHICORP_FOLDER: provider
+      EDC_COMPONENT_ID: provider-dataplane # stable id: a restart re-registers instead of adding an instance
+      EDC_DPF_SELECTOR_URL: http://provider-controlplane:8083/control/v1/dataplanes
+      EDC_DATAPLANE_PROXY_PUBLIC_ENDPOINT: http://provider-dataplane:8085/public # goes into the EDR
+      EDC_DATASOURCE_DEFAULT_URL: jdbc:postgresql://edc-postgres:5432/provider_dataplane
+
+  consumer-identityhub:
+    <<: *runtime
+    build: { context: connector, args: { MODULE: identityhub } }
+    environment:
+      <<: *identityhub-env
+      EDC_HOSTNAME: consumer-identityhub
+      EDC_VAULT_HASHICORP_TOKEN: ${VAULT_TOKEN_CONSUMER_IDENTITYHUB:-dev-consumer-identityhub-token}
+      EDC_VAULT_HASHICORP_FOLDER: consumer
+      EDC_DATASOURCE_DEFAULT_URL: jdbc:postgresql://edc-postgres:5432/consumer_identityhub
+
+  consumer-controlplane:
+    <<: *runtime
+    build: { context: connector, args: { MODULE: controlplane } }
+    environment:
+      <<: *controlplane-env
+      EDC_PARTICIPANT_ID: did:web:consumer-identityhub%3A7083:consumer
+      EDC_HOSTNAME: consumer-controlplane
+      EDC_VAULT_HASHICORP_TOKEN: ${VAULT_TOKEN_CONSUMER_CONTROLPLANE:-dev-consumer-controlplane-token}
+      EDC_VAULT_HASHICORP_FOLDER: consumer
+      WEB_HTTP_MANAGEMENT_AUTH_KEY: ${CONSUMER_API_KEY:-consumer-api-key}
+      EDC_DSP_CALLBACK_ADDRESS: http://consumer-controlplane:8082/protocol
+      EDC_DATASOURCE_DEFAULT_URL: jdbc:postgresql://edc-postgres:5432/consumer_controlplane
+      EDC_IAM_STS_OAUTH_TOKEN_URL: http://consumer-identityhub:7084/api/sts/token
+      EDC_IAM_STS_OAUTH_CLIENT_ID: did:web:consumer-identityhub%3A7083:consumer
+      EDC_IAM_STS_OAUTH_CLIENT_SECRET_ALIAS: consumer-sts-client-secret
+
+  consumer-dataplane:
+    <<: *runtime
+    build: { context: connector, args: { MODULE: dataplane } }
+    environment:
+      <<: *dataplane-env
+      EDC_PARTICIPANT_ID: did:web:consumer-identityhub%3A7083:consumer
+      EDC_HOSTNAME: consumer-dataplane
+      EDC_VAULT_HASHICORP_TOKEN: ${VAULT_TOKEN_CONSUMER_DATAPLANE:-dev-consumer-dataplane-token}
+      EDC_VAULT_HASHICORP_FOLDER: consumer
+      EDC_COMPONENT_ID: consumer-dataplane # stable id: a restart re-registers instead of adding an instance
+      EDC_DPF_SELECTOR_URL: http://consumer-controlplane:8083/control/v1/dataplanes
+      EDC_DATAPLANE_PROXY_PUBLIC_ENDPOINT: http://consumer-dataplane:8085/public # goes into the EDR
+      EDC_DATASOURCE_DEFAULT_URL: jdbc:postgresql://edc-postgres:5432/consumer_dataplane
+
+volumes:
+  edc-postgres-data:
+  vault-data:
+  vault-init:

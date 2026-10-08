@@ -1,0 +1,5 @@
+{
+  "id": "membership-attestation",
+  "attestationType": "membership",
+  "configuration": {}
+}

@@ -131,7 +131,10 @@ app_port_defaults_when_repo_example_lacks_it() {
     own_projects_dir envd
     make_repo "$WORK/src/envd" ".env.example=FOO=bar" "Gemfile=x"
     "$NEW_PROJECT" rails envd --from "$WORK/src/envd"
-    grep -qx "APP_PORT=3000" "$PROJECTS_DIR/envd/.env"
+    # 3000, unless something on this machine already listens there.
+    local want=3000
+    while (exec 3<> "/dev/tcp/127.0.0.1/$want") 2> /dev/null; do want=$((want + 1)); done
+    grep -qx "APP_PORT=$want" "$PROJECTS_DIR/envd/.env"
 }
 
 repo_devcontainer_is_kept_and_reported() {
@@ -235,10 +238,10 @@ services_with_adopted_repo() {
 
 env_reaches_the_container() {
     own_projects_dir envc
-    make_repo "$WORK/src/envc" ".env.example=APP_PORT=3640"
+    local port; port="$(free_ports 1)"
+    make_repo "$WORK/src/envc" ".env.example=APP_PORT=$port"
     "$NEW_PROJECT" fastapi envc --from "$WORK/src/envc"
-    docker compose -f "$PROJECTS_DIR/envc/compose.yaml" config --format json \
-        | python3 -c 'import json,sys; assert json.load(sys.stdin)["services"]["dev"]["environment"]["APP_PORT"] == "3640"'
+    docker compose -f "$PROJECTS_DIR/envc/compose.yaml" config --format json | grep -q "\"APP_PORT\": \"$port\""
 }
 
 ide_vscode_adds_extensions_and_opens() {
@@ -357,9 +360,14 @@ shared_files_reach_every_template() {
     for t in $(template_names); do
         "$NEW_PROJECT" "$t" "shared-$t"
         for f in compose.yaml .env.example; do
-            [[ "$(cat "$PROJECTS_DIR/shared-$t/$f")" == \
+            # A template with its own services (compose.template.yaml) adds an include: block on top.
+            [[ "$(awk 'NR == 1 && /^include:$/ { skip = 1 } skip { if (/^$/) skip = 0; next } 1' "$PROJECTS_DIR/shared-$t/$f")" == \
                "$(sed -e "s|{{PROJECT_NAME}}|shared-$t|g" -e "s|{{IMAGE}}|$BASE_IMAGE|g" \
-                      -e "s|{{PORT}}|$(template_port "$SANDBOX/templates/$t")|g" "$SANDBOX/templates/_shared/$f")" ]] \
+                      -e "s|{{PORT}}|$(template_port "$SANDBOX/templates/$t")|g" "$SANDBOX/templates/_shared/$f"
+                  # a template's own variables (templates/<name>/env) follow the shared ones
+                  if [[ "$f" == .env.example && -f "$SANDBOX/templates/$t/env" ]]; then
+                      printf '\n# %s template\n' "$t"; cat "$SANDBOX/templates/$t/env"
+                  fi)" ]] \
                 || { echo "$t: $f differs from templates/_shared/$f"; return 1; }
         done
     done
@@ -394,6 +402,66 @@ update_brings_shared_fix_to_every_template() {
     done
 }
 
+# --- template services (scaffold/compose.template.yaml) -----------------------
+
+# given_template_services <sandbox>: the node template gets an extra service.
+given_template_services() {
+    printf 'services:\n  extra:\n    image: {{IMAGE}}\n    command: sleep infinity\n    labels:\n      project: {{PROJECT_NAME}}\n' \
+        > "$1/templates/node/scaffold/compose.template.yaml"
+}
+
+template_services_are_included() {
+    local sb="$WORK/sb-tsvc"; make_sandbox "$sb"; given_template_services "$sb"
+    "$sb/scripts/new-project" node tsvc
+    local p="$PROJECTS_DIR/tsvc"
+    grep -qx '  - compose.template.yaml' "$p/compose.yaml"
+    grep -q "image: $BASE_IMAGE" "$p/compose.template.yaml"
+    grep -q "project: tsvc" "$p/compose.template.yaml"
+    grep -qE "^file [0-9a-f]{64} compose.template.yaml$" "$p/.devcontainer/template.lock"
+    [[ "$(docker compose -f "$p/compose.yaml" config --services | sort | paste -sd' ')" == "dev extra" ]]
+}
+
+template_services_come_before_with_services() {
+    local sb="$WORK/sb-tsvc2"; make_sandbox "$sb"; given_template_services "$sb"
+    "$sb/scripts/new-project" node tsvc2 --with redis
+    [[ "$(sed -n '/^include:/,/^$/p' "$PROJECTS_DIR/tsvc2/compose.yaml")" == \
+       "$(printf 'include:\n  - compose.template.yaml\n  - compose.redis.yaml\n')" ]]
+}
+
+update_brings_template_services_change() {
+    local sb="$WORK/sb-tsvc3"; make_sandbox "$sb"; given_template_services "$sb"
+    "$sb/scripts/new-project" node tsvc3
+    echo "    init: true" >> "$sb/templates/node/scaffold/compose.template.yaml"
+    (cd "$PROJECTS_DIR/tsvc3" && "$sb/scripts/dev.real" update) > /dev/null
+    grep -qx "    init: true" "$PROJECTS_DIR/tsvc3/compose.template.yaml"
+}
+
+no_template_services_no_include() {
+    "$NEW_PROJECT" node notsvc
+    fails grep -q '^include:' "$PROJECTS_DIR/notsvc/compose.yaml"
+}
+
+# --- template variables (templates/<name>/env) -------------------------------
+
+template_env_reaches_env_example_and_env() {
+    local sb="$WORK/sb-tenv"; make_sandbox "$sb"
+    printf 'FEATURE_FLAG=on\n' > "$sb/templates/node/env"
+    "$sb/scripts/new-project" node tenv
+    local p="$PROJECTS_DIR/tenv" f
+    for f in .env.example .env; do
+        grep -qx "FEATURE_FLAG=on" "$p/$f" || { echo "missing in $f"; return 1; }
+    done
+}
+
+update_brings_template_env_change() {
+    local sb="$WORK/sb-tenv2"; make_sandbox "$sb"
+    printf 'FEATURE_FLAG=on\n' > "$sb/templates/node/env"
+    "$sb/scripts/new-project" node tenv2
+    printf 'OTHER=1\n' >> "$sb/templates/node/env"
+    (cd "$PROJECTS_DIR/tenv2" && "$sb/scripts/dev.real" update) > /dev/null
+    grep -qx "OTHER=1" "$PROJECTS_DIR/tenv2/.env.example"
+}
+
 # --- host port (APP_PORT) -----------------------------------------------------
 # Each scenario gets its own projects folder: every project's .env claims a port.
 
@@ -402,39 +470,57 @@ own_projects_dir() {
     mkdir -p "$PROJECTS_DIR"
 }
 
-# listen_on <port>: hold the port on 127.0.0.1 until the scenario ends (prints the pid).
+# free_ports <n>: the first of n consecutive ports nothing listens on, from a random base
+# (fixed ports break the scenarios whenever something else on the machine uses them).
+free_ports() {
+    local base i
+    while :; do
+        base=$((20000 + RANDOM % 40000))
+        for ((i = 0; i < $1; i++)); do
+            if (exec 3<> "/dev/tcp/127.0.0.1/$((base + i))") 2> /dev/null; then continue 2; fi
+        done
+        echo "$base"; return
+    done
+}
+
+# listen_on <port>: hold the port on 127.0.0.1 (a container; prints its id, for docker rm -f).
 listen_on() {
-    python3 -c 'import socket, sys, time
-s = socket.socket(); s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(); time.sleep(60)' "$1" > /dev/null 2>&1 &
-    echo $!
-    sleep 0.3
+    docker run -d --rm --entrypoint sh -p "127.0.0.1:$1:9" "$CLI_IMAGE" -c 'while nc -l -p 9; do :; done'
+    local _
+    for _ in $(seq 1 20); do
+        if (exec 3<> "/dev/tcp/127.0.0.1/$1") 2> /dev/null; then return; fi
+        sleep 0.2
+    done
 }
 
 port_claimed_by_stopped_project_is_skipped() {
     own_projects_dir claim
-    make_repo "$WORK/src/claim" ".env.example=APP_PORT=3610" "package.json={}"
+    local port; port="$(free_ports 2)"
+    make_repo "$WORK/src/claim" ".env.example=APP_PORT=$port" "package.json={}"
     "$NEW_PROJECT" node claim1 --from "$WORK/src/claim"
     "$NEW_PROJECT" node claim2 --from "$WORK/src/claim" > "$WORK/claim.out"
-    grep -qx "APP_PORT=3610" "$PROJECTS_DIR/claim1/.env"
-    grep -qx "APP_PORT=3611" "$PROJECTS_DIR/claim2/.env"
-    grep -q "3611 (3610 is taken)" "$WORK/claim.out"
+    grep -qx "APP_PORT=$port" "$PROJECTS_DIR/claim1/.env"
+    grep -qx "APP_PORT=$((port + 1))" "$PROJECTS_DIR/claim2/.env"
+    grep -q "$((port + 1)) ($port is taken)" "$WORK/claim.out"
 }
 
 port_in_use_on_host_is_skipped() {
     own_projects_dir listen
-    local pid; pid="$(listen_on 3620)"
-    make_repo "$WORK/src/listen" ".env.example=APP_PORT=3620" "package.json={}"
+    local port holder; port="$(free_ports 2)"
+    holder="$(listen_on "$port")"
+    make_repo "$WORK/src/listen" ".env.example=APP_PORT=$port" "package.json={}"
     "$NEW_PROJECT" node listen --from "$WORK/src/listen"
-    kill "$pid"
-    grep -qx "APP_PORT=3621" "$PROJECTS_DIR/listen/.env"
+    docker rm -f "$holder" > /dev/null
+    grep -qx "APP_PORT=$((port + 1))" "$PROJECTS_DIR/listen/.env"
 }
 
 explicit_app_port_is_used_even_if_taken() {
     own_projects_dir explicit
-    local pid; pid="$(listen_on 3630)"
-    APP_PORT=3630 "$NEW_PROJECT" node explicit
-    kill "$pid"
-    grep -qx "APP_PORT=3630" "$PROJECTS_DIR/explicit/.env"
+    local port holder; port="$(free_ports 1)"
+    holder="$(listen_on "$port")"
+    APP_PORT=$port "$NEW_PROJECT" node explicit
+    docker rm -f "$holder" > /dev/null
+    grep -qx "APP_PORT=$port" "$PROJECTS_DIR/explicit/.env"
 }
 
 repo_own_env_port_is_kept() {
@@ -578,6 +664,18 @@ update_without_lock_explains() {
     cmp "$WORK/upd7-compose" "$p/compose.yaml"
 }
 
+update_leaves_untracked_file_that_differs() {
+    local sb="$WORK/sb-differs"; make_sandbox "$sb"
+    make_repo "$WORK/src/upd9" ".gitignore=mine" "package.json={}"
+    "$sb/scripts/new-project" node upd9 --from "$WORK/src/upd9"
+    local p="$PROJECTS_DIR/upd9"
+    echo "# template fix" >> "$sb/templates/node/scaffold/.gitignore"
+    (cd "$p" && "$sb/scripts/dev.real" update) > /dev/null
+    [[ "$(cat "$p/.gitignore")" == mine ]]
+    [[ ! -e "$p/.gitignore.template-new" ]]
+    fails grep -q " .gitignore$" "$p/.devcontainer/template.lock"
+}
+
 usage_rejects_incomplete_from() {
     fails "$NEW_PROJECT" rails x --from > /dev/null 2>&1
     fails "$NEW_PROJECT" rails x --bogus y > /dev/null 2>&1
@@ -615,6 +713,12 @@ scenario "Shared scaffold files reach every template" shared_files_reach_every_t
 scenario "A template's own file wins over the shared one" template_file_wins_over_shared
 scenario "_shared is not a template" shared_is_not_a_template
 scenario "dev update brings a shared fix to every template" update_brings_shared_fix_to_every_template
+scenario "A template's own services are included" template_services_are_included
+scenario "Template services come before --with services" template_services_come_before_with_services
+scenario "dev update brings a template services change" update_brings_template_services_change
+scenario "No template services, no include" no_template_services_no_include
+scenario "A template's own variables reach .env.example and .env" template_env_reaches_env_example_and_env
+scenario "dev update brings a template variables change" update_brings_template_env_change
 scenario "A port claimed by a stopped project is skipped" port_claimed_by_stopped_project_is_skipped
 scenario "A port in use on the host is skipped" port_in_use_on_host_is_skipped
 scenario "An explicit APP_PORT is used even if taken" explicit_app_port_is_used_even_if_taken
@@ -630,6 +734,7 @@ scenario "dev update keeps adopted settings" update_keeps_adopted_settings
 scenario "dev update adds new files and respects deletions" update_adds_new_files_and_respects_deletions
 scenario "dev update keeps services and IDE settings" update_keeps_services_and_ide
 scenario "dev update without a lock explains and changes nothing" update_without_lock_explains
+scenario "dev update leaves an untracked file that differs" update_leaves_untracked_file_that_differs
 
 # Each template's own scenarios (adopt, env-skip), kept next to it in templates/<name>/test.
 for f in "$SANDBOX"/templates/*/test; do

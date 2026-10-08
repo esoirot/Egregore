@@ -1,0 +1,15 @@
+{
+  "@context": {
+    "@vocab": "https://w3id.org/edc/v0.0.1/ns/"
+  },
+  "@id": "gtfs-partners-only-offer",
+  "accessPolicyId": "partners-only",
+  "contractPolicyId": "partners-only",
+  "assetsSelector": [
+    {
+      "operandLeft": "https://w3id.org/edc/v0.0.1/ns/id",
+      "operator": "=",
+      "operandRight": "gtfs-partners-only"
+    }
+  ]
+}

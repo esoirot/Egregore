@@ -1,0 +1,86 @@
+# Deploy profile: a hosted data space learners look at (the trip planner and a read-only summary).
+# deploy/up layers it over compose.template.yaml (paths below are relative to the project root).
+# What changes from the learning stack:
+#   - secrets from deploy/.env (deploy/init: random), never the dev defaults (deploy/up refuses them)
+#   - Vault: mlock on; its unseal key in deploy/secrets/ (owner only), not in a Docker volume; the
+#     root token revoked after setup; each runtime its own token, its participant's folder only
+#   - only caddy publishes ports (HTTPS); management, identity, DID, protocol APIs, Vault and
+#     Postgres stay on the private network. did:web is resolved there, over HTTP: no DID is
+#     resolved from outside. Not deployed: the dev container, the Dev Containers CLI, the Gaia-X mock.
+#   - the setup job onboards the members and publishes the offers; the app negotiates its contract
+#     itself and caches the timetable 60 s (visitors cannot make it pull at each request)
+services:
+  vault:
+    cap_add: [IPC_LOCK] # mlock: Vault's memory is never swapped to disk...
+    ulimits:
+      memlock: -1 # ...and may lock as much as it needs
+    environment:
+      VAULT_LOCAL_CONFIG: '{"storage": {"file": {"path": "/vault/file"}}, "listener": [{"tcp": {"address": "0.0.0.0:8200", "tls_disable": true}}], "disable_mlock": false, "ui": false}'
+
+  vault-seed:
+    user: "${DEPLOY_UID:?run deploy/up}:${DEPLOY_GID:?run deploy/up}" # writes deploy/secrets/ as its owner
+    volumes:
+      - ./deploy/secrets:/vault-init
+    environment:
+      REVOKE_ROOT: "true"
+
+  # One-shot: the authority, both identities and memberships, both members' offers (idempotent).
+  setup:
+    build: { context: ., dockerfile: deploy/runner/Dockerfile }
+    command: ["deploy/setup"]
+    labels:
+      eonax.role: job
+    depends_on:
+      issuerservice: { condition: service_healthy }
+      provider-identityhub: { condition: service_healthy }
+      provider-controlplane: { condition: service_healthy }
+      provider-dataplane: { condition: service_healthy }
+      consumer-identityhub: { condition: service_healthy }
+      consumer-controlplane: { condition: service_healthy }
+      consumer-dataplane: { condition: service_healthy }
+    environment: &keys
+      PROVIDER_API_KEY: ${PROVIDER_API_KEY:?}
+      CONSUMER_API_KEY: ${CONSUMER_API_KEY:?}
+      IDENTITYHUB_SUPERUSER_KEY: ${IDENTITYHUB_SUPERUSER_KEY:?}
+      ISSUER_SUPERUSER_KEY: ${ISSUER_SUPERUSER_KEY:?}
+
+  # The trip planner (app/Server.java), behind caddy.
+  app:
+    build: { context: ., dockerfile: deploy/runner/Dockerfile }
+    command: ["java", "app/Server.java", "0.0.0.0"]
+    restart: unless-stopped
+    depends_on:
+      setup: { condition: service_completed_successfully }
+      poi-backend: { condition: service_healthy }
+    environment:
+      <<: *keys
+      EONAX_APP_CACHE_SECONDS: "60"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+
+  # The only door: HTTPS (a real certificate for a domain in SITE_ADDRESS, its own CA for localhost).
+  caddy:
+    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    restart: unless-stopped
+    depends_on:
+      app: { condition: service_healthy }
+    ports:
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTP_PORT:-80}:80" # redirects to HTTPS; Let's Encrypt checks the domain here
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-localhost}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data # certificates
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:2019/config/"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  caddy-data:

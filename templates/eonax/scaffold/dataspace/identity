@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# A participant gets its identity in its own Identity Hub (just identity provider|consumer):
+#   - a DID document, published at http://<participant>-identityhub:7083/<participant>/did.json
+#   - a key pair (the private key stays in the participant's Vault folder)
+#   - service endpoints in the DID document: where its credentials can be asked for (CredentialService)
+#     and where its connector speaks the Dataspace Protocol (ProtocolEndpoint)
+#   - an STS client for its connector: the Identity Hub writes the client secret to the participant's
+#     Vault folder (<participant>-sts-client-secret), where its control plane reads it
+set -euo pipefail
+source "$(dirname "$0")/lib.sh"
+
+p="${1:?Usage: identity provider|consumer}"
+did="$(did_of "$p")"
+body="$(jq --arg p "$p" --arg did "$did" '
+    .participantContextId = $p | .did = $did
+    | .key.keyId = "\($did)#key-1" | .key.privateKeyAlias = "\($did)#key-1"
+    | .serviceEndpoints[0].serviceEndpoint = "http://\($p)-identityhub:7082/api/credentials/v1/participants/\($p)"
+    | .serviceEndpoints[1].serviceEndpoint = "http://\($p)-controlplane:8082/protocol/2025-1"' \
+    "$REQUESTS/participant-context.json")"
+create "$(identity_api "$p")" "x-api-key: $IDENTITYHUB_KEY" "$body" "identity of $p ($did)"
+# The Identity Hub publishes the DID document once the participant is activated: wait for it.
+for _ in $(seq 1 120); do
+    if curl -sf "http://$p-identityhub:7083/$p/did.json" -o "$STATE/did.$p.json"; then break; fi
+    sleep 1
+done
+jq -c '{id, service: [.service[].type]}' "$STATE/did.$p.json"
+echo "Next: just membership $p"
