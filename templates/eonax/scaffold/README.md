@@ -87,6 +87,7 @@ The heart of a data space: a provider offers data under a contract, a consumer f
 Things to notice:
 
 * You always talk to **your own** connector (its management API, with your `X-Api-Key`); connectors talk to each other over the Dataspace Protocol (`/protocol`).
+* The bodies in `dataspace/requests/` speak the management API **v4**: each is JSON-LD, with `"@context": ["https://w3id.org/edc/connector/management/v2"]` and an `@type` (`Asset`, `PolicyDefinition`, ...). Policy terms carry their vocabulary: `edc:MembershipCredential`, `odrl:purpose`. One call is still v3: the EDR (`/v3/edrs`), which has no v4 yet in EDC 0.18.1.
 * The consumer never sees `http://gtfs-backend:8000`: the EDR points at the provider's data plane, which fetches from the backend.
 * The EDR token is signed with keys from Vault (`vault-seed` put them there); try the same `curl` later and it expires.
 `negotiate` and `transfer` take an asset (default `gtfs-demo-transit`; others in chapter 4). `just test` runs the whole flow, checks the consumer received a GTFS feed, then checks the trust rules (chapter 3) and the usage policies (chapter 4). Management API keys default to `provider-api-key` and `consumer-api-key`; set `PROVIDER_API_KEY` and `CONSUMER_API_KEY` in `.env` to change them (then `dev down && dev up`).
@@ -141,7 +142,7 @@ Try them:
 | Step | Who | What happens | Read |
 | --- | --- | --- | --- |
 | `just publish-pois` | consumer | any participant can provide: the travel app offers its tourist points of interest (GeoJSON, from its own `poi-backend`), members only, from its own control plane | `dataspace/publish-pois`, `requests/asset-pois.json`, `contract-definition-pois.json` |
-| `just federated-catalog` | consumer | queries its crawled cache: every member's offers in one answer (`/management/v3/catalogs/request`) | `dataspace/federated-catalog`, `.dataspace/federated-catalog.json` |
+| `just federated-catalog` | consumer | queries its crawled cache: every member's offers in one answer (`/management/v4/catalogs/request`) | `dataspace/federated-catalog`, `.dataspace/federated-catalog.json` |
 
 Who gets crawled: the members' **DIDs** (`EONAX_CATALOG_PARTICIPANTS`). Our `MemberDirectoryExtension` (`connector/controlplane/src/`) resolves each DID at every crawl and takes its `ProtocolEndpoint` from the DID document (set by `just identity`): no address is configured anywhere, and a member that joins later shows up by itself. A real data space would read the member list from a registry instead of a setting.
 

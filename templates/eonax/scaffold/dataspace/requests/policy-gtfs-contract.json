@@ -1,16 +1,16 @@
 {
-  "@context": { "@vocab": "https://w3id.org/edc/v0.0.1/ns/" },
+  "@context": ["https://w3id.org/edc/connector/management/v2"],
+  "@type": "PolicyDefinition",
   "@id": "gtfs-contract",
   "policy": {
-    "@context": "http://www.w3.org/ns/odrl.jsonld",
     "@type": "Set",
     "permission": [
       {
         "action": "use",
         "constraint": [
-          { "leftOperand": "MembershipCredential", "operator": "eq", "rightOperand": "active" },
-          { "leftOperand": "purpose", "operator": "eq", "rightOperand": "mobility" },
-          { "leftOperand": "inForceDate", "operator": "lteq", "rightOperand": "contractAgreement+1d" }
+          { "leftOperand": "edc:MembershipCredential", "operator": "eq", "rightOperand": "active" },
+          { "leftOperand": "odrl:purpose", "operator": "eq", "rightOperand": "mobility" },
+          { "leftOperand": "edc:inForceDate", "operator": "lteq", "rightOperand": "contractAgreement+1d" }
         ]
       }
     ]

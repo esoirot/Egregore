@@ -22,19 +22,19 @@ post /v5beta/celexpressions cel-membership.json
 post /v5beta/celexpressions cel-partner.json
 post /v5beta/celexpressions cel-purpose.json
 for p in policy policy-gtfs-contract policy-expired policy-30s policy-partners; do
-    post /v3/policydefinitions "$p.json"
+    post /v4/policydefinitions "$p.json"
 done
-post /v3/assets asset.json
-post /v3/assets asset-partners.json
-post /v3/contractdefinitions contract-definition.json
-post /v3/contractdefinitions contract-definition-partners.json
+post /v4/assets asset.json
+post /v4/assets asset-partners.json
+post /v4/contractdefinitions contract-definition.json
+post /v4/contractdefinitions contract-definition-partners.json
 
 # Time window demos: the same timetable under contracts that end (see policy-expired.json, policy-30s.json).
 for demo in expired:expired-contract 30s:30s-contract; do
     asset="gtfs-${demo%%:*}"
-    create "$PROVIDER_MANAGEMENT/v3/assets" "$key" \
+    create "$PROVIDER_MANAGEMENT/v4/assets" "$key" \
         "$(jq --arg id "$asset" '.["@id"] = $id | .properties.name += " (\($id | ltrimstr("gtfs-")) contract)"' "$REQUESTS/asset.json")" "asset $asset"
-    create "$PROVIDER_MANAGEMENT/v3/contractdefinitions" "$key" \
+    create "$PROVIDER_MANAGEMENT/v4/contractdefinitions" "$key" \
         "$(jq --arg id "$asset" --arg policy "${demo#*:}" '.["@id"] = "\($id)-offer" | .contractPolicyId = $policy
             | .assetsSelector[0].operandRight = $id' "$REQUESTS/contract-definition.json")" "offer $asset"
 done

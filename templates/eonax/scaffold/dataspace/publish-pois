@@ -7,7 +7,7 @@ source "$(dirname "$0")/lib.sh"
 
 key="X-Api-Key: ${CONSUMER_API_KEY:-consumer-api-key}"
 create "$CONSUMER_MANAGEMENT/v5beta/celexpressions" "$key" "$(cat "$REQUESTS/cel-membership.json")" cel-membership.json
-create "$CONSUMER_MANAGEMENT/v3/policydefinitions" "$key" "$(cat "$REQUESTS/policy.json")" policy.json
-create "$CONSUMER_MANAGEMENT/v3/assets" "$key" "$(cat "$REQUESTS/asset-pois.json")" asset-pois.json
-create "$CONSUMER_MANAGEMENT/v3/contractdefinitions" "$key" "$(cat "$REQUESTS/contract-definition-pois.json")" contract-definition-pois.json
+create "$CONSUMER_MANAGEMENT/v4/policydefinitions" "$key" "$(cat "$REQUESTS/policy.json")" policy.json
+create "$CONSUMER_MANAGEMENT/v4/assets" "$key" "$(cat "$REQUESTS/asset-pois.json")" asset-pois.json
+create "$CONSUMER_MANAGEMENT/v4/contractdefinitions" "$key" "$(cat "$REQUESTS/contract-definition-pois.json")" contract-definition-pois.json
 echo "The consumer offers 'tourism-pois' to members. Next: just federated-catalog"

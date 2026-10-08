@@ -1,15 +1,10 @@
 {
-  "@context": {
-    "@vocab": "https://w3id.org/edc/v0.0.1/ns/"
-  },
+  "@context": ["https://w3id.org/edc/connector/management/v2"],
+  "@type": "ContractDefinition",
   "@id": "gtfs-partners-only-offer",
   "accessPolicyId": "partners-only",
   "contractPolicyId": "partners-only",
   "assetsSelector": [
-    {
-      "operandLeft": "https://w3id.org/edc/v0.0.1/ns/id",
-      "operator": "=",
-      "operandRight": "gtfs-partners-only"
-    }
+    { "@type": "Criterion", "operandLeft": "https://w3id.org/edc/v0.0.1/ns/id", "operator": "=", "operandRight": "gtfs-partners-only" }
   ]
 }

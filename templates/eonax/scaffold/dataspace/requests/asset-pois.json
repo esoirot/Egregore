@@ -1,5 +1,6 @@
 {
-  "@context": { "@vocab": "https://w3id.org/edc/v0.0.1/ns/" },
+  "@context": ["https://w3id.org/edc/connector/management/v2"],
+  "@type": "Asset",
   "@id": "tourism-pois",
   "properties": {
     "name": "Demo tourist points of interest (GeoJSON)",

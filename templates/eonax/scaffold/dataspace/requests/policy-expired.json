@@ -1,15 +1,15 @@
 {
-  "@context": { "@vocab": "https://w3id.org/edc/v0.0.1/ns/" },
+  "@context": ["https://w3id.org/edc/connector/management/v2"],
+  "@type": "PolicyDefinition",
   "@id": "expired-contract",
   "policy": {
-    "@context": "http://www.w3.org/ns/odrl.jsonld",
     "@type": "Set",
     "permission": [
       {
         "action": "use",
         "constraint": [
-          { "leftOperand": "MembershipCredential", "operator": "eq", "rightOperand": "active" },
-          { "leftOperand": "inForceDate", "operator": "lteq", "rightOperand": "2026-01-01T00:00:00Z" }
+          { "leftOperand": "edc:MembershipCredential", "operator": "eq", "rightOperand": "active" },
+          { "leftOperand": "edc:inForceDate", "operator": "lteq", "rightOperand": "2026-01-01T00:00:00Z" }
         ]
       }
     ]

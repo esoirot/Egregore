@@ -9,7 +9,7 @@ source "$(dirname "$0")/lib.sh"
 
 members="$(tr ',' '\n' <<< "${EONAX_CATALOG_PARTICIPANTS:-$(did_of provider),$(did_of consumer)}" | grep -c .)"
 for _ in $(seq 1 150); do
-    management consumer POST /v3/catalogs/request "$(cat "$REQUESTS/catalogs-query.json")" > "$STATE/federated-catalog.json"
+    management consumer POST /v4/catalogs/request "$(cat "$REQUESTS/catalogs-query.json")" > "$STATE/federated-catalog.json"
     if [[ "$(jq '[.[] | select(([.dataset // .["dcat:dataset"]] | flatten | map(select(. != null)) | length) > 0)] | length' \
         "$STATE/federated-catalog.json")" -ge "$members" ]]; then
         break

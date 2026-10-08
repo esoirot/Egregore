@@ -102,6 +102,25 @@ eonax_waits_allow_a_slow_machine() {
          END { if (!loops) { print "no polling loop found"; bad = 1 }; exit bad }' {} +
 }
 
+# Management API v4 (EDC 0.18.1): v3 only where v4 does not exist yet (the EDR cache).
+eonax_management_calls_use_v4() {
+    local d="$SANDBOX/templates/eonax/scaffold" left
+    left="$(grep -rnE '/v3/' "$d/dataspace" "$d/app" "$d/deploy" | grep -v '/v3/edrs' || true)"
+    [[ -z "$left" ]] || { echo "v3 management calls left:"; echo "$left"; return 1; }
+}
+
+eonax_management_bodies_use_the_v4_context() {
+    local f
+    for f in "$SANDBOX"/templates/eonax/scaffold/dataspace/requests/{asset,policy,contract-,transfer-request,catalog}*.json; do
+        python3 -c 'import json, sys
+body = json.load(open(sys.argv[1]))
+ctx = body.get("@context")
+assert isinstance(ctx, list) and "https://w3id.org/edc/connector/management/v2" in ctx, "@context must list management/v2"
+assert body.get("@type"), "@type missing"
+' "$f" || { echo "in ${f##*/}"; return 1; }
+    done
+}
+
 # --- deploy profile (deploy/): a hosted data space learners only look at --------------------------
 DEPLOY_SECRETS=(PROVIDER_API_KEY CONSUMER_API_KEY IDENTITYHUB_SUPERUSER_KEY ISSUER_SUPERUSER_KEY EDC_DB_PASSWORD
     VAULT_TOKEN_ISSUERSERVICE VAULT_TOKEN_PROVIDER_IDENTITYHUB VAULT_TOKEN_PROVIDER_CONTROLPLANE
@@ -167,3 +186,5 @@ scenario "eonax: polling loops allow a slow machine" eonax_waits_allow_a_slow_ma
 scenario "eonax deploy: init generates strong, distinct secrets and keeps them" eonax_deploy_init_generates_secrets
 scenario "eonax deploy: up refuses a default or empty secret, starts nothing" eonax_deploy_up_refuses_weak_secrets
 scenario "eonax deploy: only caddy is reachable, no dev, mock or Docker socket" eonax_deploy_stack_is_closed
+scenario "eonax: management calls use API v4 (v3 only for EDRs)" eonax_management_calls_use_v4
+scenario "eonax: management request bodies use the v4 context and a type" eonax_management_bodies_use_the_v4_context

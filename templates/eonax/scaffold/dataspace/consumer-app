@@ -45,9 +45,9 @@ code="$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:3000/dat
 [[ "$code" == 405 ]] || { echo "✗ a POST got $code, not 405" >&2; exit 1; }
 echo "✓ the data space summary lists the offers, without secrets; the app is read only"
 
-management consumer POST "/v3/transferprocesses/$transfer/terminate" \
-    '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "TerminateTransfer", "reason": "consumer-app --check"}' > /dev/null
-wait_for_state consumer "/v3/transferprocesses/$transfer" TERMINATED
+management consumer POST "/v4/transferprocesses/$transfer/terminate" \
+    '{"@context": ["https://w3id.org/edc/connector/management/v2"], "@type": "TerminateTransfer", "reason": "consumer-app --check"}' > /dev/null
+wait_for_state consumer "/v4/transferprocesses/$transfer" TERMINATED
 again="$(transfer_of data/stops.txt)"
 [[ -n "$again" && "$again" != "$transfer" ]] || { echo "✗ after the transfer stopped, the app did not pull under a new one" >&2; exit 1; }
 echo "✓ transfer stopped: the app started a new one ($again) and still serves the timetable"

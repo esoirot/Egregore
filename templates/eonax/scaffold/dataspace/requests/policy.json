@@ -1,13 +1,15 @@
 {
-  "@context": { "@vocab": "https://w3id.org/edc/v0.0.1/ns/" },
+  "@context": ["https://w3id.org/edc/connector/management/v2"],
+  "@type": "PolicyDefinition",
   "@id": "members-only",
   "policy": {
-    "@context": "http://www.w3.org/ns/odrl.jsonld",
     "@type": "Set",
     "permission": [
       {
         "action": "use",
-        "constraint": { "leftOperand": "MembershipCredential", "operator": "eq", "rightOperand": "active" }
+        "constraint": [
+          { "leftOperand": "edc:MembershipCredential", "operator": "eq", "rightOperand": "active" }
+        ]
       }
     ]
   }

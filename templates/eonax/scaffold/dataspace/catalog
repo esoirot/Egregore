@@ -6,7 +6,7 @@
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 
-if ! management consumer POST /v3/catalog/request "$(cat "$REQUESTS/catalog-request.json")" > "$STATE/catalog.json"; then
+if ! management consumer POST /v4/catalog/request "$(cat "$REQUESTS/catalog-request.json")" > "$STATE/catalog.json"; then
     echo "Refused: $(cat "$STATE/catalog.json")" >&2
     echo "(the provider only answers members: does the consumer hold a MembershipCredential? just membership consumer)" >&2
     exit 1

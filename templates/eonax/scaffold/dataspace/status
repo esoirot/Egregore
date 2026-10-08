@@ -7,7 +7,7 @@
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 
-offers="$(management consumer POST /v3/catalogs/request "$(cat "$REQUESTS/catalogs-query.json")" \
+offers="$(management consumer POST /v4/catalogs/request "$(cat "$REQUESTS/catalogs-query.json")" \
     | jq '[.[] | {member: (.participantId // .["dspace:participantId"] // "?"),
                   assets: [[.dataset // .["dcat:dataset"]] | flatten | map(select(. != null)) | .[]
                            | {id: .["@id"], name: (.name // .["edc:name"] // "")}]}]')"
@@ -16,7 +16,7 @@ credentials="$(curl -sS --fail-with-body -H "x-api-key: $IDENTITYHUB_KEY" "$(ide
 transfer=null
 if [[ -s "$STATE/transfer-id.$ASSET_ID" ]]; then
     id="$(cat "$STATE/transfer-id.$ASSET_ID")"
-    transfer="$(management consumer GET "/v3/transferprocesses/$id" | jq --arg id "$id" '{id: $id, state: .state}')"
+    transfer="$(management consumer GET "/v4/transferprocesses/$id" | jq --arg id "$id" '{id: $id, state: .state}')"
 fi
 jq -n --argjson offers "$offers" --argjson credentials "$credentials" --argjson transfer "$transfer" \
     '{offers: $offers, credentials: $credentials, transfer: $transfer}'
