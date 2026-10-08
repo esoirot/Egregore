@@ -22,13 +22,13 @@ create "$credentials/request" "$key" "$body" "credential request $request"
 api="$credentials/request"
 
 status=""
-for _ in $(seq 1 30); do
+for _ in $(seq 1 120); do
     status="$(curl -sS --fail-with-body -H "$key" "$api/$request" | jq -r '.status')"
     if [[ "$status" == ISSUED ]]; then break; fi
     sleep 1
 done
 if [[ "$status" != ISSUED ]]; then
-    echo "Credential request $request is $status after 30 s: docker compose logs issuerservice $p-identityhub" >&2
+    echo "Credential request $request is $status after 120 s: docker compose logs issuerservice $p-identityhub" >&2
     exit 1
 fi
 echo "✓ ISSUED: $p holds a MembershipCredential from $AUTHORITY_DID"

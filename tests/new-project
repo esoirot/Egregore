@@ -238,10 +238,10 @@ services_with_adopted_repo() {
 
 env_reaches_the_container() {
     own_projects_dir envc
-    make_repo "$WORK/src/envc" ".env.example=APP_PORT=3640"
+    local port; port="$(free_ports 1)"
+    make_repo "$WORK/src/envc" ".env.example=APP_PORT=$port"
     "$NEW_PROJECT" fastapi envc --from "$WORK/src/envc"
-    docker compose -f "$PROJECTS_DIR/envc/compose.yaml" config --format json \
-        | python3 -c 'import json,sys; assert json.load(sys.stdin)["services"]["dev"]["environment"]["APP_PORT"] == "3640"'
+    docker compose -f "$PROJECTS_DIR/envc/compose.yaml" config --format json | grep -q "\"APP_PORT\": \"$port\""
 }
 
 ide_vscode_adds_extensions_and_opens() {
@@ -470,39 +470,57 @@ own_projects_dir() {
     mkdir -p "$PROJECTS_DIR"
 }
 
-# listen_on <port>: hold the port on 127.0.0.1 until the scenario ends (prints the pid).
+# free_ports <n>: the first of n consecutive ports nothing listens on, from a random base
+# (fixed ports break the scenarios whenever something else on the machine uses them).
+free_ports() {
+    local base i
+    while :; do
+        base=$((20000 + RANDOM % 40000))
+        for ((i = 0; i < $1; i++)); do
+            if (exec 3<> "/dev/tcp/127.0.0.1/$((base + i))") 2> /dev/null; then continue 2; fi
+        done
+        echo "$base"; return
+    done
+}
+
+# listen_on <port>: hold the port on 127.0.0.1 (a container; prints its id, for docker rm -f).
 listen_on() {
-    python3 -c 'import socket, sys, time
-s = socket.socket(); s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(); time.sleep(60)' "$1" > /dev/null 2>&1 &
-    echo $!
-    sleep 0.3
+    docker run -d --rm --entrypoint sh -p "127.0.0.1:$1:9" "$CLI_IMAGE" -c 'while nc -l -p 9; do :; done'
+    local _
+    for _ in $(seq 1 20); do
+        if (exec 3<> "/dev/tcp/127.0.0.1/$1") 2> /dev/null; then return; fi
+        sleep 0.2
+    done
 }
 
 port_claimed_by_stopped_project_is_skipped() {
     own_projects_dir claim
-    make_repo "$WORK/src/claim" ".env.example=APP_PORT=3610" "package.json={}"
+    local port; port="$(free_ports 2)"
+    make_repo "$WORK/src/claim" ".env.example=APP_PORT=$port" "package.json={}"
     "$NEW_PROJECT" node claim1 --from "$WORK/src/claim"
     "$NEW_PROJECT" node claim2 --from "$WORK/src/claim" > "$WORK/claim.out"
-    grep -qx "APP_PORT=3610" "$PROJECTS_DIR/claim1/.env"
-    grep -qx "APP_PORT=3611" "$PROJECTS_DIR/claim2/.env"
-    grep -q "3611 (3610 is taken)" "$WORK/claim.out"
+    grep -qx "APP_PORT=$port" "$PROJECTS_DIR/claim1/.env"
+    grep -qx "APP_PORT=$((port + 1))" "$PROJECTS_DIR/claim2/.env"
+    grep -q "$((port + 1)) ($port is taken)" "$WORK/claim.out"
 }
 
 port_in_use_on_host_is_skipped() {
     own_projects_dir listen
-    local pid; pid="$(listen_on 3620)"
-    make_repo "$WORK/src/listen" ".env.example=APP_PORT=3620" "package.json={}"
+    local port holder; port="$(free_ports 2)"
+    holder="$(listen_on "$port")"
+    make_repo "$WORK/src/listen" ".env.example=APP_PORT=$port" "package.json={}"
     "$NEW_PROJECT" node listen --from "$WORK/src/listen"
-    kill "$pid"
-    grep -qx "APP_PORT=3621" "$PROJECTS_DIR/listen/.env"
+    docker rm -f "$holder" > /dev/null
+    grep -qx "APP_PORT=$((port + 1))" "$PROJECTS_DIR/listen/.env"
 }
 
 explicit_app_port_is_used_even_if_taken() {
     own_projects_dir explicit
-    local pid; pid="$(listen_on 3630)"
-    APP_PORT=3630 "$NEW_PROJECT" node explicit
-    kill "$pid"
-    grep -qx "APP_PORT=3630" "$PROJECTS_DIR/explicit/.env"
+    local port holder; port="$(free_ports 1)"
+    holder="$(listen_on "$port")"
+    APP_PORT=$port "$NEW_PROJECT" node explicit
+    docker rm -f "$holder" > /dev/null
+    grep -qx "APP_PORT=$port" "$PROJECTS_DIR/explicit/.env"
 }
 
 repo_own_env_port_is_kept() {

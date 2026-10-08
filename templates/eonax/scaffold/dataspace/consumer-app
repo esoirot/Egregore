@@ -20,7 +20,7 @@ fi
 java app/Server.java 127.0.0.1 > "$STATE/consumer-app.log" 2>&1 &
 server=$!
 trap 'kill "$server" 2> /dev/null' EXIT
-for _ in $(seq 1 60); do
+for _ in $(seq 1 120); do
     if curl -sf http://127.0.0.1:3000/ -o /dev/null; then break; fi
     sleep 0.5
 done

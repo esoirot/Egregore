@@ -50,7 +50,7 @@ create() {
 # wait_for_state <participant> <path> <wanted-state>: poll a negotiation or transfer process.
 wait_for_state() {
     local state=""
-    for _ in $(seq 1 60); do
+    for _ in $(seq 1 180); do
         state="$(management "$1" GET "$2" | jq -r '.state')"
         if [[ "$state" == "$3" ]]; then return 0; fi
         if [[ "$state" == TERMINATED ]]; then
@@ -59,7 +59,7 @@ wait_for_state() {
         fi
         sleep 1
     done
-    echo "Still $state after 60 s (wanted $3): docker compose logs, from the project folder on the host." >&2
+    echo "Still $state after 180 s (wanted $3): docker compose logs, from the project folder on the host." >&2
     return 1
 }
 

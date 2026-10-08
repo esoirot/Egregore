@@ -1,5 +1,6 @@
 // Data plane: moves the data (HTTP pull and push); registers itself with its control plane.
 dependencies {
+    runtimeOnly(project(":jetty")) // keeps a path from answering 404 forever after a start
     // Our own code (src/main/java): the public API consumers pull from.
     implementation(libs.edc.data.plane.spi)
     implementation(libs.edc.web.spi)

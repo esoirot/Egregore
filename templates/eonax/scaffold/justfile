@@ -92,9 +92,7 @@ wait:
     set -euo pipefail
     for c in {{components}}; do
         for i in $(seq 1 60); do
-            # readiness or liveness: either says the runtime is up (one of them can be missing, see CLAUDE.md)
-            if curl -sf --max-time 3 "http://$c:8080/api/check/readiness" -o /dev/null \
-                || curl -sf --max-time 3 "http://$c:8080/api/check/liveness" -o /dev/null; then break; fi
+            if curl -sf --max-time 3 "http://$c:8080/api/check/readiness" -o /dev/null; then break; fi
             if [[ $i -eq 60 ]]; then echo "✗ $c did not start: docker compose logs $c (on the host)" >&2; exit 1; fi
             sleep 5
         done

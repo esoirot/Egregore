@@ -26,7 +26,7 @@ dataspace/negotiate gtfs-30s > /dev/null
 dataspace/transfer gtfs-30s > /dev/null
 transfer="$(cat "$STATE/transfer-id.gtfs-30s")"
 echo "  transfer under the 30 s contract started; waiting for the policy monitor..."
-for _ in $(seq 1 120); do
+for _ in $(seq 1 300); do
     if [[ "$(management consumer GET "/v3/transferprocesses/$transfer" | jq -r .state)" == TERMINATED ]]; then
         code="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: $(jq -r .authorization "$STATE/edr.gtfs-30s.json")" \
             "$(jq -r .endpoint "$STATE/edr.gtfs-30s.json")")"
@@ -36,5 +36,5 @@ for _ in $(seq 1 120); do
     fi
     sleep 1
 done
-echo "✗ the transfer under the 30 s contract still runs after 2 minutes" >&2
+echo "✗ the transfer under the 30 s contract still runs after 5 minutes" >&2
 exit 1

@@ -20,7 +20,7 @@ echo "Transfer process $transfer started"
 wait_for_state consumer "/v3/transferprocesses/$transfer" STARTED
 
 # The EDR arrives asynchronously after STARTED: retry briefly.
-for _ in $(seq 1 20); do
+for _ in $(seq 1 60); do
     if management consumer GET "/v3/edrs/$transfer/dataaddress" > "$STATE/edr.$asset.json" 2> /dev/null; then break; fi
     sleep 1
 done

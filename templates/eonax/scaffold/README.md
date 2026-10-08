@@ -66,6 +66,7 @@ Things to notice:
 
 * A data plane registers itself with its control plane at start (`EDC_DPF_SELECTOR_URL`): the control plane then knows where to send transfers.
 * The connector code is only a list of EDC modules (`connector/controlplane/build.gradle.kts`, `connector/dataplane/build.gradle.kts`): EDC loads every extension it finds on the classpath. The control plane uses `iam-mock` for now: every participant is trusted until the trust chapter replaces it with credentials.
+* Every runtime also carries `connector/jetty/`: a fix for a start-up race in EDC's web server that could leave one path (a health probe, the data plane's registration) answering 404 until a restart.
 * All configuration is environment variables in `compose.template.yaml`: `EDC_PARTICIPANT_ID` is the setting `edc.participant.id`, and so on.
 
 After changing connector code, rebuild the images from the project folder on the host: `docker compose build && dev down && dev up` (not `docker compose up`: it recreates `dev` without what `dev exec` needs).

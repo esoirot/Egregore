@@ -1,5 +1,6 @@
 // Control plane: catalog, contract negotiation, transfer process, management API, Dataspace Protocol.
 dependencies {
+    runtimeOnly(project(":jetty")) // keeps a path from answering 404 forever after a start
     // Our code (src/main/java): the member directory of the federated catalog crawler.
     implementation(libs.edc.crawler.spi)
     implementation(libs.edc.identity.did.spi)

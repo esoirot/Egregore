@@ -1,6 +1,7 @@
 // Issuer Service: the data space authority. Registers members (holders) and issues them
 // a MembershipCredential when they ask (DCP issuance).
 dependencies {
+    runtimeOnly(project(":jetty")) // keeps a path from answering 404 forever after a start
     runtimeOnly(project(":superuser")) // the super-user account of its APIs
     implementation(libs.edc.issuance.spi) // our code: the "membership" attestation (src/main/java)
     runtimeOnly(libs.edc.bom.issuerservice)

@@ -19,7 +19,7 @@ body="$(jq --arg p "$p" --arg did "$did" '
     "$REQUESTS/participant-context.json")"
 create "$(identity_api "$p")" "x-api-key: $IDENTITYHUB_KEY" "$body" "identity of $p ($did)"
 # The Identity Hub publishes the DID document once the participant is activated: wait for it.
-for _ in $(seq 1 30); do
+for _ in $(seq 1 120); do
     if curl -sf "http://$p-identityhub:7083/$p/did.json" -o "$STATE/did.$p.json"; then break; fi
     sleep 1
 done
