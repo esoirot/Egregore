@@ -173,6 +173,30 @@ The page (`app/index.html`, plain JavaScript drawing SVG, no external library) i
 
 `just test` runs everything, in order: `wait`, the flow (onboard, publish, catalog, negotiate, transfer), the trust checks, the usage policies, Gaia-X, the federated catalog, and the app (`consumer-app --check`: live data, and a new transfer once the old one is stopped).
 
+## Deploying it: a hosted data space to look at
+
+`deploy/` runs this data space on a server, for learners to **look at**: the trip planner and, under it, a read-only summary of the data space (the offers each member sees, the travel app's credentials, the current transfer). Synthetic data only. The hands-on steps stay in your own project (`dev up`). On the server you need Docker and curl:
+
+```bash
+deploy/init     # deploy/.env: a random value for every secret (owner only); set SITE_ADDRESS to your domain
+deploy/up       # checks the secrets, starts everything, onboards the members, publishes the offers
+deploy/check    # HTTPS, closed ports, Vault isolation, no secret in the summary
+deploy/down     # stops it (data stays)
+```
+
+What it changes from the learning stack, and why:
+
+| Risk in the learning stack | In `deploy/` |
+| --- | --- |
+| Known secrets (`provider-api-key`, the superuser key, `edc`) | Random, from `deploy/init`; `deploy/up` refuses a missing one or a default |
+| One root token for every runtime | Each runtime has its own Vault token, which reaches its participant's folder only; the root token is revoked after setup |
+| Unseal key next to Vault's data | In `deploy/secrets/` (owner only), outside Docker volumes; Vault locks its memory (mlock) |
+| Everything reachable on the network | Only Caddy is published (HTTPS: a Let's Encrypt certificate for your domain, its own CA for `localhost`); the management, identity, DID and protocol APIs, Vault and Postgres are on the private network only |
+| The Gaia-X mock accepts any DID | Not deployed (nor the dev container) |
+| Visitors could make the app pull at every request | The app keeps the timetable 60 s and answers only GET |
+
+Accepted, because one operator hosts every member and nothing is reached from outside but the app: did:web over HTTP on the private network, one Vault for the three participants (separated by policies), and membership for every registered holder (registering needs the issuer's admin API, which is private). A real pilot, with organizations of their own, needs more: each member hosts its own connector and Vault (auto-unseal), DIDs over HTTPS on their domains, and an authority that checks who it admits.
+
 ## Kubernetes-ready rules
 
 The stack runs on Docker Compose but must move to Kubernetes without redesign. Every component follows these rules (`templates/eonax/test` in Egregore checks the ones marked ✓):

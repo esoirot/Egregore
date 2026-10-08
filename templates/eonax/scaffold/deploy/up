@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Deploy profile, step 2: checks deploy/.env, then starts the hosted data space and sets it up.
+#   deploy/up            build, start, run the setup job (onboarding, offers), wait for the app
+#   deploy/up --config   print the resolved configuration (JSON) and start nothing
+# Refuses, before anything starts, a secret that is missing, empty or a dev default (the ${VAR:-...}
+# values of compose.template.yaml, published in this repository).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+source deploy/lib.sh
+
+[[ -f deploy/.env ]] || { echo "No deploy/.env: run deploy/init first." >&2; exit 1; }
+weak=()
+for s in "${SECRETS[@]}"; do
+    value="$(sed -n "s/^$s=//p" deploy/.env)"
+    default="$(sed -n "s/.*\${$s:-\([^}]*\)}.*/\1/p" compose.template.yaml | head -1)"
+    if [[ -z "$value" || "$value" == "$default" ]]; then weak+=("$s"); fi
+done
+if [[ ${#weak[@]} -gt 0 ]]; then
+    echo "Refused: missing, empty or dev default in deploy/.env: ${weak[*]} (deploy/init fills missing ones)" >&2
+    exit 1
+fi
+
+if [[ "${1:-}" == --config ]]; then compose config --format json; exit 0; fi
+
+# --wait: until every service is healthy and the jobs are done (the app waits for setup to succeed).
+if ! compose up -d --build --wait; then
+    echo "Not up: docker compose -p $(basename "$PWD")-deploy ps -a, then logs <service> (e.g. setup)" >&2
+    exit 1
+fi
+port="$(sed -n 's/^HTTPS_PORT=//p' deploy/.env)"
+echo "Hosted data space up: https://$(sed -n 's/^SITE_ADDRESS=//p' deploy/.env):${HTTPS_PORT:-$port}/"

@@ -8,10 +8,9 @@ eonax_stack_json() {
     docker compose -f "$1/compose.yaml" config --format json
 }
 
-eonax_stack_is_kubernetes_ready() {
-    "$NEW_PROJECT" eonax eonax-k8s
-    local p="$PROJECTS_DIR/eonax-k8s"
-    eonax_stack_json "$p" | python3 -c 'import json, os, sys
+# kubernetes_ready <project>: the resolved compose configuration on stdin keeps the rules.
+kubernetes_ready() {
+    python3 -c 'import json, os, sys
 project = sys.argv[1]
 services = {n: s for n, s in json.load(sys.stdin)["services"].items() if n != "dev"}
 assert services, "no data space services"
@@ -30,7 +29,13 @@ for name, s in services.items():
         assert os.path.isfile(os.path.join(b["context"], b.get("dockerfile", "Dockerfile"))), where + "build without a Dockerfile"
     else:
         assert "@sha256:" in s["image"], where + "image must be pinned by digest"
-' "$p"
+' "$1"
+}
+
+eonax_stack_is_kubernetes_ready() {
+    "$NEW_PROJECT" eonax eonax-k8s
+    local p="$PROJECTS_DIR/eonax-k8s"
+    eonax_stack_json "$p" | kubernetes_ready "$p"
 }
 
 eonax_project_has_the_connector_sources() {
@@ -97,9 +102,68 @@ eonax_waits_allow_a_slow_machine() {
          END { if (!loops) { print "no polling loop found"; bad = 1 }; exit bad }' {} +
 }
 
+# --- deploy profile (deploy/): a hosted data space learners only look at --------------------------
+DEPLOY_SECRETS=(PROVIDER_API_KEY CONSUMER_API_KEY IDENTITYHUB_SUPERUSER_KEY ISSUER_SUPERUSER_KEY EDC_DB_PASSWORD
+    VAULT_TOKEN_ISSUERSERVICE VAULT_TOKEN_PROVIDER_IDENTITYHUB VAULT_TOKEN_PROVIDER_CONTROLPLANE
+    VAULT_TOKEN_PROVIDER_DATAPLANE VAULT_TOKEN_CONSUMER_IDENTITYHUB VAULT_TOKEN_CONSUMER_CONTROLPLANE
+    VAULT_TOKEN_CONSUMER_DATAPLANE)
+
+eonax_deploy_init_generates_secrets() {
+    "$NEW_PROJECT" eonax eonax-dinit
+    local p="$PROJECTS_DIR/eonax-dinit" v value
+    "$p/deploy/init" > /dev/null
+    [[ "$(stat -c %a "$p/deploy/.env")" == 600 ]] || { echo "deploy/.env is not 0600"; return 1; }
+    for v in "${DEPLOY_SECRETS[@]}"; do
+        value="$(sed -n "s/^$v=//p" "$p/deploy/.env")"
+        [[ ${#value} -ge 24 ]] || { echo "$v missing or short: '$value'"; return 1; }
+        if grep -qF -- "$value" "$p/compose.template.yaml"; then echo "$v is a dev default"; return 1; fi
+    done
+    [[ "$(grep -E "^($(IFS='|'; echo "${DEPLOY_SECRETS[*]}"))=" "$p/deploy/.env" | cut -d= -f2- | sort -u | wc -l)" \
+        -eq ${#DEPLOY_SECRETS[@]} ]] || { echo "secrets are not all different"; return 1; }
+    cp "$p/deploy/.env" "$WORK/dinit.env"
+    "$p/deploy/init" > /dev/null
+    cmp "$WORK/dinit.env" "$p/deploy/.env"
+}
+
+eonax_deploy_up_refuses_weak_secrets() {
+    "$NEW_PROJECT" eonax eonax-dweak
+    local p="$PROJECTS_DIR/eonax-dweak"
+    "$p/deploy/init" > /dev/null
+    sed -i 's/^PROVIDER_API_KEY=.*/PROVIDER_API_KEY=provider-api-key/; s/^EDC_DB_PASSWORD=.*/EDC_DB_PASSWORD=/' "$p/deploy/.env"
+    fails "$p/deploy/up" > "$WORK/dweak.out" 2>&1
+    grep -q PROVIDER_API_KEY "$WORK/dweak.out" || { echo "default not named: $(cat "$WORK/dweak.out")"; return 1; }
+    grep -q EDC_DB_PASSWORD "$WORK/dweak.out" || { echo "empty not named: $(cat "$WORK/dweak.out")"; return 1; }
+    [[ -z "$(docker ps -aq --filter label=com.docker.compose.project=eonax-dweak-deploy)" ]]
+}
+
+eonax_deploy_stack_is_closed() {
+    "$NEW_PROJECT" eonax eonax-dclosed
+    local p="$PROJECTS_DIR/eonax-dclosed"
+    "$p/deploy/init" > /dev/null
+    "$p/deploy/up" --config > "$WORK/dclosed.json"
+    kubernetes_ready "$p" < "$WORK/dclosed.json"
+    python3 -c 'import json, sys
+s = json.load(open(sys.argv[1]))["services"]
+published = sorted(n for n, v in s.items() if v.get("ports"))
+assert published == ["caddy"], "only caddy may publish ports, not: %s" % published
+for n in ("dev", "gaiax-mock"):
+    assert n not in s, n + " must not be deployed"
+for n, v in s.items():
+    for m in v.get("volumes", []):
+        assert "docker.sock" not in m.get("source", ""), n + " mounts the Docker socket"
+assert "IPC_LOCK" in s["vault"].get("cap_add", []), "vault needs IPC_LOCK (mlock)"
+assert json.loads(s["vault"]["environment"]["VAULT_LOCAL_CONFIG"])["disable_mlock"] is False, "mlock must stay on"
+tokens = [v["environment"]["EDC_VAULT_HASHICORP_TOKEN"] for v in s.values() if "EDC_VAULT_HASHICORP_TOKEN" in v.get("environment", {})]
+assert len(tokens) == 7 and len(set(tokens)) == 7, "each runtime needs its own Vault token"
+' "$WORK/dclosed.json"
+}
+
 scenario "eonax: the data space stack keeps the Kubernetes-ready rules" eonax_stack_is_kubernetes_ready
 scenario "eonax: a new project gets the connector sources" eonax_project_has_the_connector_sources
 scenario "eonax: the Gaia-X mock stays in gaiax-mock/ and its switch points" eonax_gaiax_mock_stays_isolated
 scenario "eonax: dev update reaches the course material" eonax_update_reaches_the_course_material
 scenario "eonax: the map labels do not overlap" eonax_map_labels_do_not_overlap
 scenario "eonax: polling loops allow a slow machine" eonax_waits_allow_a_slow_machine
+scenario "eonax deploy: init generates strong, distinct secrets and keeps them" eonax_deploy_init_generates_secrets
+scenario "eonax deploy: up refuses a default or empty secret, starts nothing" eonax_deploy_up_refuses_weak_secrets
+scenario "eonax deploy: only caddy is reachable, no dev, mock or Docker socket" eonax_deploy_stack_is_closed

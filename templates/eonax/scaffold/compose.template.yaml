@@ -29,7 +29,7 @@ x-runtime-env: &runtime-env
   EDC_DATASOURCE_DEFAULT_PASSWORD: ${EDC_DB_PASSWORD:-edc}
   EDC_SQL_SCHEMA_AUTOCREATE: "true"
   EDC_VAULT_HASHICORP_URL: http://vault:8200 # secrets (keys, tokens): one folder per participant
-  EDC_VAULT_HASHICORP_TOKEN: ${VAULT_TOKEN:-dev-root-token}
+  # EDC_VAULT_HASHICORP_TOKEN: set per runtime below, its own token (reaches its participant's folder only)
   EDC_ENCRYPTION_AES_KEY_ALIAS: aes-key-alias # put in each folder by vault-seed
   EDC_IAM_DID_WEB_USE_HTTPS: "false" # did:web over plain HTTP inside this network (production: HTTPS)
   EDC_IAM_CREDENTIAL_REVOCATION_MIMETYPE: application/json
@@ -98,7 +98,7 @@ services:
   # A real Vault server, its data in a named volume: keys and identities survive dev down / dev up
   # (Postgres keeps the identities' records, Vault their private keys: both must persist).
   # vault-seed unseals it at each start. Production: auto-unseal (cloud KMS) or Kubernetes Secrets;
-  # the runtimes only need EDC_VAULT_HASHICORP_URL and _TOKEN changed.
+  # the runtimes only need EDC_VAULT_HASHICORP_URL and their _TOKEN changed.
   vault:
     image: hashicorp/vault:2.1.1@sha256:47f14a6acb98f48d798a07df7c83f23a6e636e1cf724c5f8ff165cb32667a1e2
     command: server
@@ -113,8 +113,9 @@ services:
       timeout: 3s
       retries: 10
 
-  # Runs at each dev up: initializes Vault once, unseals it, makes sure the runtimes' token and the
-  # secrets below exist. Its unseal key lives in the vault-init volume: a dev shortcut, never production.
+  # Runs at each dev up: initializes Vault once, unseals it, makes sure each runtime's token (its
+  # folder only) and the secrets below exist (vault-seed/seed.sh). Its unseal key and root token live
+  # in the vault-init volume: a dev shortcut (the deploy profile keeps them out of Docker volumes).
   vault-seed:
     build: vault-seed
     labels:
@@ -126,8 +127,15 @@ services:
       - vault-init:/vault-init
     environment:
       VAULT_ADDR: http://vault:8200
-      VAULT_TOKEN: ${VAULT_TOKEN:-dev-root-token}
-      FOLDERS: issuer provider consumer # an encryption key each
+      # <runtime token>:<its folder>, one per runtime below (an encryption key per folder)
+      RUNTIMES: >-
+        ${VAULT_TOKEN_ISSUERSERVICE:-dev-issuerservice-token}:issuer
+        ${VAULT_TOKEN_PROVIDER_IDENTITYHUB:-dev-provider-identityhub-token}:provider
+        ${VAULT_TOKEN_PROVIDER_CONTROLPLANE:-dev-provider-controlplane-token}:provider
+        ${VAULT_TOKEN_PROVIDER_DATAPLANE:-dev-provider-dataplane-token}:provider
+        ${VAULT_TOKEN_CONSUMER_IDENTITYHUB:-dev-consumer-identityhub-token}:consumer
+        ${VAULT_TOKEN_CONSUMER_CONTROLPLANE:-dev-consumer-controlplane-token}:consumer
+        ${VAULT_TOKEN_CONSUMER_DATAPLANE:-dev-consumer-dataplane-token}:consumer
       PARTICIPANTS: provider consumer # transfer token keys each (their data planes)
 
   # The provider's own system holding the data (not part of the data space).
@@ -171,6 +179,7 @@ services:
     environment:
       <<: *runtime-env
       EDC_HOSTNAME: issuerservice
+      EDC_VAULT_HASHICORP_TOKEN: ${VAULT_TOKEN_ISSUERSERVICE:-dev-issuerservice-token}
       EDC_VAULT_HASHICORP_FOLDER: issuer
       EDC_DATASOURCE_DEFAULT_URL: jdbc:postgresql://edc-postgres:5432/issuerservice
       WEB_HTTP_STS_PORT: "10011"
@@ -195,6 +204,7 @@ services:
     environment:
       <<: *identityhub-env
       EDC_HOSTNAME: provider-identityhub
+      EDC_VAULT_HASHICORP_TOKEN: ${VAULT_TOKEN_PROVIDER_IDENTITYHUB:-dev-provider-identityhub-token}
       EDC_VAULT_HASHICORP_FOLDER: provider
       EDC_DATASOURCE_DEFAULT_URL: jdbc:postgresql://edc-postgres:5432/provider_identityhub
 
@@ -205,6 +215,7 @@ services:
       <<: *controlplane-env
       EDC_PARTICIPANT_ID: did:web:provider-identityhub%3A7083:provider
       EDC_HOSTNAME: provider-controlplane
+      EDC_VAULT_HASHICORP_TOKEN: ${VAULT_TOKEN_PROVIDER_CONTROLPLANE:-dev-provider-controlplane-token}
       EDC_VAULT_HASHICORP_FOLDER: provider
       WEB_HTTP_MANAGEMENT_AUTH_KEY: ${PROVIDER_API_KEY:-provider-api-key}
       EDC_DSP_CALLBACK_ADDRESS: http://provider-controlplane:8082/protocol
@@ -221,6 +232,7 @@ services:
       <<: *dataplane-env
       EDC_PARTICIPANT_ID: did:web:provider-identityhub%3A7083:provider
       EDC_HOSTNAME: provider-dataplane
+      EDC_VAULT_HASHICORP_TOKEN: ${VAULT_TOKEN_PROVIDER_DATAPLANE:-dev-provider-dataplane-token}
       EDC_VAULT_HASHICORP_FOLDER: provider
       EDC_COMPONENT_ID: provider-dataplane # stable id: a restart re-registers instead of adding an instance
       EDC_DPF_SELECTOR_URL: http://provider-controlplane:8083/control/v1/dataplanes
@@ -233,6 +245,7 @@ services:
     environment:
       <<: *identityhub-env
       EDC_HOSTNAME: consumer-identityhub
+      EDC_VAULT_HASHICORP_TOKEN: ${VAULT_TOKEN_CONSUMER_IDENTITYHUB:-dev-consumer-identityhub-token}
       EDC_VAULT_HASHICORP_FOLDER: consumer
       EDC_DATASOURCE_DEFAULT_URL: jdbc:postgresql://edc-postgres:5432/consumer_identityhub
 
@@ -243,6 +256,7 @@ services:
       <<: *controlplane-env
       EDC_PARTICIPANT_ID: did:web:consumer-identityhub%3A7083:consumer
       EDC_HOSTNAME: consumer-controlplane
+      EDC_VAULT_HASHICORP_TOKEN: ${VAULT_TOKEN_CONSUMER_CONTROLPLANE:-dev-consumer-controlplane-token}
       EDC_VAULT_HASHICORP_FOLDER: consumer
       WEB_HTTP_MANAGEMENT_AUTH_KEY: ${CONSUMER_API_KEY:-consumer-api-key}
       EDC_DSP_CALLBACK_ADDRESS: http://consumer-controlplane:8082/protocol
@@ -258,6 +272,7 @@ services:
       <<: *dataplane-env
       EDC_PARTICIPANT_ID: did:web:consumer-identityhub%3A7083:consumer
       EDC_HOSTNAME: consumer-dataplane
+      EDC_VAULT_HASHICORP_TOKEN: ${VAULT_TOKEN_CONSUMER_DATAPLANE:-dev-consumer-dataplane-token}
       EDC_VAULT_HASHICORP_FOLDER: consumer
       EDC_COMPONENT_ID: consumer-dataplane # stable id: a restart re-registers instead of adding an instance
       EDC_DPF_SELECTOR_URL: http://consumer-controlplane:8083/control/v1/dataplanes

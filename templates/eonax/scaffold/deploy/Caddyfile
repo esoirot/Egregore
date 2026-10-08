@@ -1,0 +1,11 @@
+# The hosted data space's only public address: the trip planner (app), over HTTPS.
+{$SITE_ADDRESS} {
+	reverse_proxy app:3000
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		-Server
+	}
+}

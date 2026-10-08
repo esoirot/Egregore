@@ -17,6 +17,7 @@
   table { border-collapse: collapse; width: 100%; font-size: 14px; }
   th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #e5e7eb; }
   #error { color: #b91c1c; }
+  #status ul { margin: 4px 0 12px; padding-left: 20px; } #status code { font-size: 13px; }
 </style>
 </head>
 <body>
@@ -29,6 +30,8 @@
   <svg id="map" viewBox="0 0 900 500" role="img" aria-label="Map of the bus line and places to visit"></svg>
   <h2>First departures</h2>
   <table id="departures"><thead><tr><th>Stop</th><th>Trip T1</th><th>Trip T2</th></tr></thead><tbody></tbody></table>
+  <h2>The data space behind it</h2>
+  <div id="status"><p class="lead">Loading…</p></div>
 </main>
 <script>
 // GTFS text files (CSV) -> list of objects keyed by the header row.
@@ -104,6 +107,19 @@ const get = async (path, parse) => {
     body.insertAdjacentHTML("beforeend", `<tr><td>${byId[t.stop_id].stop_name}</td><td>${t.departure_time.slice(0, 5)}</td><td>${t2 ? t2.departure_time.slice(0, 5) : ""}</td></tr>`);
   });
 })().catch(e => { document.getElementById("error").textContent = e.message; });
+
+// Read-only summary from the app's server: what the consumer's connector sees in the data space.
+(async () => {
+  const status = await get("api/status", JSON.parse);
+  const esc = text => String(text).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+  const list = items => `<ul>${items.map(i => `<li>${i}</li>`).join("") || "<li>none</li>"}</ul>`;
+  document.getElementById("status").innerHTML =
+    "<p>Offers in the federated catalog, by member:</p>" +
+    list(status.offers.map(o => `<code>${esc(o.member)}</code>: ${o.assets.map(a => esc(a.name || a.id)).join(", ") || "none visible"}`)) +
+    "<p>Credentials in the travel app's wallet:</p>" +
+    list(status.credentials.map(c => `${esc([].concat(c.types).filter(t => t !== "VerifiableCredential").join(", "))}, issued by <code>${esc(c.issuer)}</code>`)) +
+    `<p>Timetable transfer: ${status.transfer ? `<code>${esc(status.transfer.id)}</code> (${esc(status.transfer.state)})` : "none yet"}</p>`;
+})().catch(e => { document.getElementById("status").textContent = e.message; });
 </script>
 </body>
 </html>

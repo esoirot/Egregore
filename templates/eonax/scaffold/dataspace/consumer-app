@@ -37,6 +37,13 @@ transfer="$(transfer_of data/stops.txt)"
 [[ "$transfer" == "$(cat "$STATE/transfer-id.$ASSET_ID")" ]] \
     || { echo "✗ the timetable was not pulled under the current transfer ($transfer)" >&2; exit 1; }
 echo "✓ the trip planner serves its page, its own places and the provider's timetable, pulled live (transfer $transfer)"
+status="$(curl -sSf http://127.0.0.1:3000/api/status)"
+jq -e '[.offers[].assets[].id] | index("gtfs-demo-transit")' <<< "$status" > /dev/null \
+    || { echo "✗ the data space summary lists no GTFS offer: $status" >&2; exit 1; }
+if grep -qF -- "${CONSUMER_API_KEY:-consumer-api-key}" <<< "$status"; then echo "✗ the summary shows the API key" >&2; exit 1; fi
+code="$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:3000/data/stops.txt)"
+[[ "$code" == 405 ]] || { echo "✗ a POST got $code, not 405" >&2; exit 1; }
+echo "✓ the data space summary lists the offers, without secrets; the app is read only"
 
 management consumer POST "/v3/transferprocesses/$transfer/terminate" \
     '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "TerminateTransfer", "reason": "consumer-app --check"}' > /dev/null

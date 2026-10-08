@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# The deploy profile's setup job: the authority, both members' identities and memberships, and their
+# offers. Every step keeps what exists: it runs at each deploy/up.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+dataspace/authority
+for p in provider consumer; do dataspace/identity "$p"; done
+for p in provider consumer; do dataspace/membership "$p"; done
+dataspace/publish
+dataspace/publish-pois
