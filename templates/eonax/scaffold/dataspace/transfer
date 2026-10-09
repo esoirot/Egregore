@@ -13,13 +13,13 @@ asset="${1:-$ASSET_ID}"
 need "agreement-id.$asset" negotiate
 
 body="$(jq --arg id "$(cat "$STATE/agreement-id.$asset")" '.contractId = $id' "$REQUESTS/transfer-request.json")"
-response="$(management consumer POST /v3/transferprocesses "$body")" || { echo "Refused: $response" >&2; exit 1; }
+response="$(management consumer POST /v4/transferprocesses "$body")" || { echo "Refused: $response" >&2; exit 1; }
 transfer="$(jq -r '.["@id"]' <<< "$response")"
 echo "$transfer" > "$STATE/transfer-id.$asset"
 echo "Transfer process $transfer started"
-wait_for_state consumer "/v3/transferprocesses/$transfer" STARTED
+wait_for_state consumer "/v4/transferprocesses/$transfer" STARTED
 
-# The EDR arrives asynchronously after STARTED: retry briefly.
+# The EDR arrives asynchronously after STARTED: retry briefly. (API v3: EDC 0.18.1 has no v4 EDR API yet.)
 for _ in $(seq 1 60); do
     if management consumer GET "/v3/edrs/$transfer/dataaddress" > "$STATE/edr.$asset.json" 2> /dev/null; then break; fi
     sleep 1

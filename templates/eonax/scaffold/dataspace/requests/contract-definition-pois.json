@@ -1,13 +1,10 @@
 {
-  "@context": { "@vocab": "https://w3id.org/edc/v0.0.1/ns/" },
+  "@context": ["https://w3id.org/edc/connector/management/v2"],
+  "@type": "ContractDefinition",
   "@id": "tourism-pois-offer",
   "accessPolicyId": "members-only",
   "contractPolicyId": "members-only",
   "assetsSelector": [
-    {
-      "operandLeft": "https://w3id.org/edc/v0.0.1/ns/id",
-      "operator": "=",
-      "operandRight": "tourism-pois"
-    }
+    { "@type": "Criterion", "operandLeft": "https://w3id.org/edc/v0.0.1/ns/id", "operator": "=", "operandRight": "tourism-pois" }
   ]
 }

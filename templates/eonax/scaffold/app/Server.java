@@ -77,7 +77,7 @@ public class Server {
         for (var attempt = 1; ; attempt++) {
             var transfer = Files.exists(TRANSFER_ID) ? Files.readString(TRANSFER_ID).trim() : "";
             // No EDR once the transfer stopped; a refused token once the contract ended.
-            var edr = transfer.isEmpty() ? "{}" : management("/v3/edrs/" + transfer + "/dataaddress");
+            var edr = transfer.isEmpty() ? "{}" : management("/v3/edrs/" + transfer + "/dataaddress"); // no v4 EDR API in EDC 0.18.1
             if (field(edr, "endpoint") != null) {
                 var data = HTTP.send(HttpRequest.newBuilder(URI.create(field(edr, "endpoint")))
                         .header("Authorization", field(edr, "authorization")).build(), HttpResponse.BodyHandlers.ofByteArray());
