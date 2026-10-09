@@ -27,6 +27,7 @@ services:
   # One-shot: the authority, both identities and memberships, both members' offers (idempotent).
   setup:
     build: { context: ., dockerfile: deploy/runner/Dockerfile }
+    image: {{PROJECT_NAME}}-runner # built once, run by the app too
     command: ["deploy/setup"]
     labels:
       eonax.role: job
@@ -46,7 +47,8 @@ services:
 
   # The trip planner (app/Server.java), behind caddy.
   app:
-    build: { context: ., dockerfile: deploy/runner/Dockerfile }
+    image: {{PROJECT_NAME}}-runner # setup's image
+    pull_policy: never
     command: ["java", "app/Server.java", "0.0.0.0"]
     restart: unless-stopped
     depends_on:

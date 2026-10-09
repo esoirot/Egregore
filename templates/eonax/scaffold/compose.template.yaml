@@ -176,6 +176,7 @@ services:
   issuerservice:
     <<: *runtime
     build: { context: connector, args: { MODULE: issuerservice } }
+    image: {{PROJECT_NAME}}-issuerservice # named per project, like the other runtimes
     environment:
       <<: *runtime-env
       EDC_HOSTNAME: issuerservice
@@ -201,6 +202,7 @@ services:
   provider-identityhub:
     <<: *runtime
     build: { context: connector, args: { MODULE: identityhub } }
+    image: {{PROJECT_NAME}}-identityhub # built once, run by its consumer twin too
     environment:
       <<: *identityhub-env
       EDC_HOSTNAME: provider-identityhub
@@ -211,6 +213,7 @@ services:
   provider-controlplane:
     <<: *runtime
     build: { context: connector, args: { MODULE: controlplane } }
+    image: {{PROJECT_NAME}}-controlplane # built once, run by its consumer twin too
     environment:
       <<: *controlplane-env
       EDC_PARTICIPANT_ID: did:web:provider-identityhub%3A7083:provider
@@ -228,6 +231,7 @@ services:
   provider-dataplane:
     <<: *runtime
     build: { context: connector, args: { MODULE: dataplane } }
+    image: {{PROJECT_NAME}}-dataplane # built once, run by its consumer twin too
     environment:
       <<: *dataplane-env
       EDC_PARTICIPANT_ID: did:web:provider-identityhub%3A7083:provider
@@ -241,7 +245,8 @@ services:
 
   consumer-identityhub:
     <<: *runtime
-    build: { context: connector, args: { MODULE: identityhub } }
+    image: {{PROJECT_NAME}}-identityhub # the provider's image: same code, its own configuration
+    pull_policy: never # built here, by provider-identityhub
     environment:
       <<: *identityhub-env
       EDC_HOSTNAME: consumer-identityhub
@@ -251,7 +256,8 @@ services:
 
   consumer-controlplane:
     <<: *runtime
-    build: { context: connector, args: { MODULE: controlplane } }
+    image: {{PROJECT_NAME}}-controlplane # the provider's image: same code, its own configuration
+    pull_policy: never # built here, by provider-controlplane
     environment:
       <<: *controlplane-env
       EDC_PARTICIPANT_ID: did:web:consumer-identityhub%3A7083:consumer
@@ -267,7 +273,8 @@ services:
 
   consumer-dataplane:
     <<: *runtime
-    build: { context: connector, args: { MODULE: dataplane } }
+    image: {{PROJECT_NAME}}-dataplane # the provider's image: same code, its own configuration
+    pull_policy: never # built here, by provider-dataplane
     environment:
       <<: *dataplane-env
       EDC_PARTICIPANT_ID: did:web:consumer-identityhub%3A7083:consumer

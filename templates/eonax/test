@@ -27,8 +27,8 @@ for name, s in services.items():
     if "build" in s:
         b = s["build"]
         assert os.path.isfile(os.path.join(b["context"], b.get("dockerfile", "Dockerfile"))), where + "build without a Dockerfile"
-    else:
-        assert "@sha256:" in s["image"], where + "image must be pinned by digest"
+    elif s["image"] not in {v.get("image") for v in services.values() if "build" in v}:
+        assert "@sha256:" in s["image"], where + "image must be pinned by digest (or built by another service here)"
 ' "$1"
 }
 
@@ -100,6 +100,25 @@ eonax_waits_allow_a_slow_machine() {
          n && /sleep [0-9.]+/ { match($0, /sleep [0-9.]+/); s = substr($0, RSTART + 6, RLENGTH - 6); loops++
                                if (n * s < 60) { print f ":" l ": waits " n * s " s"; bad = 1 }; n = 0 }
          END { if (!loops) { print "no polling loop found"; bad = 1 }; exit bad }' {} +
+}
+
+# Each connector module is built once; its twin runtime (provider/consumer) runs the same image.
+eonax_runtimes_build_once() {
+    "$NEW_PROJECT" eonax eonax-once
+    local p="$PROJECTS_DIR/eonax-once"
+    eonax_stack_json "$p" | python3 -c 'import json, sys
+s = json.load(sys.stdin)["services"]
+builds = {n: v for n, v in s.items() if v.get("build", {}).get("context", "").endswith("/connector")}
+modules = sorted(v["build"]["args"]["MODULE"] for v in builds.values())
+assert modules == ["controlplane", "dataplane", "identityhub", "issuerservice"], "one build per module, not: %s" % modules
+built = {v["image"] for v in builds.values()}
+assert all(i.startswith("eonax-once-") for i in built), "image names must carry the project name: %s" % built
+runners = [n for n, v in s.items() if v.get("image") in built]
+assert len(runners) == 7, "7 runtimes run the 4 images, not: %s" % runners
+for n in runners:
+    if n not in builds:
+        assert s[n].get("pull_policy") == "never", n + " must never pull its locally built image"
+'
 }
 
 # Management API v4 (EDC 0.18.1): v3 only where v4 does not exist yet (the EDR cache).
@@ -188,3 +207,4 @@ scenario "eonax deploy: up refuses a default or empty secret, starts nothing" eo
 scenario "eonax deploy: only caddy is reachable, no dev, mock or Docker socket" eonax_deploy_stack_is_closed
 scenario "eonax: management calls use API v4 (v3 only for EDRs)" eonax_management_calls_use_v4
 scenario "eonax: management request bodies use the v4 context and a type" eonax_management_bodies_use_the_v4_context
+scenario "eonax: each connector module is built once, per project" eonax_runtimes_build_once
